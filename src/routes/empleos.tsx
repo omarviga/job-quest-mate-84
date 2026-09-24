@@ -4,19 +4,25 @@ import {
   ArrowRight,
   Briefcase,
   Building2,
+  Check,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
+  ChevronUp,
   ClipboardPaste,
   DollarSign,
   ExternalLink,
   FileText,
   Filter,
   Globe,
+  Layers,
   MapPin,
   Printer,
   RefreshCw,
+  RotateCcw,
   Search,
   Sparkles,
+  Trash2,
   X,
 } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -25,7 +31,8 @@ import {
   buildMexicanPortalUrls,
   type JobMatch,
   type JobSearchResult,
-  MEXICAN_REGIONS,
+  MEXICAN_STATES,
+  type MexicanState,
   searchJobsForCv,
   tailorCv,
 } from "@/lib/jobs.functions";
@@ -37,16 +44,16 @@ export const Route = createFileRoute("/empleos")({
       {
         name: "description",
         content:
-          "Encuentra vacantes en México en CompuTrabajo, OCCMundial, Indeed y LinkedIn ordenadas por coincidencia con tu CV.",
+          "Encuentra vacantes en México en CompuTrabajo, OCCMundial, Indeed y LinkedIn con selección de múltiples estados de la república.",
       },
       {
         property: "og:title",
-        content: "Vacantes en México para tu CV — RUMBO",
+        content: "Vacantes en México para tu CV (Multi-estado) — RUMBO",
       },
       {
         property: "og:description",
         content:
-          "Búsqueda de empleo exclusiva en México integrada con CompuTrabajo y OCCMundial con puntuación de coincidencia por IA.",
+          "Búsqueda de empleo en México con selección de múltiples estados de la república integrada con CompuTrabajo y OCCMundial.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
@@ -66,6 +73,53 @@ function toBase64(file: File) {
   });
 }
 
+const STATE_PRESETS = [
+  {
+    name: "Toda la República",
+    icon: "🇲🇽",
+    states: ["Toda la República"],
+    badge: "Nacional",
+  },
+  {
+    name: "Hubs Tech",
+    icon: "🚀",
+    states: ["Ciudad de México (CDMX)", "Jalisco", "Nuevo León"],
+    badge: "CDMX + GDL + MTY",
+  },
+  {
+    name: "Corredor Bajío",
+    icon: "🏭",
+    states: ["Querétaro", "Guanajuato", "Aguascalientes", "San Luis Potosí"],
+    badge: "QRO + GTO + AGS",
+  },
+  {
+    name: "Zona Metropolitana",
+    icon: "🏙️",
+    states: ["Ciudad de México (CDMX)", "Estado de México (Edomex)"],
+    badge: "CDMX + Edomex",
+  },
+  {
+    name: "Norte Industrial",
+    icon: "🌵",
+    states: ["Nuevo León", "Coahuila", "Chihuahua", "Baja California"],
+    badge: "Frontera / Norte",
+  },
+  {
+    name: "Península Sureste",
+    icon: "🌴",
+    states: ["Yucatán", "Quintana Roo"],
+    badge: "Mérida + Cancún",
+  },
+  {
+    name: "100% Remoto",
+    icon: "💻",
+    states: ["Remoto (México)"],
+    badge: "Teletrabajo",
+  },
+] as const;
+
+const REGION_TABS = ["Todos", "Centro", "Norte", "Bajío", "Occidente", "Sur/Sureste"] as const;
+
 function Empleos() {
   const navigate = useNavigate();
   const search = useServerFn(searchJobsForCv);
@@ -73,13 +127,25 @@ function Empleos() {
 
   const [cvText, setCvText] = useState("");
   const [file, setFile] = useState<File | null>(null);
-  const [location, setLocation] = useState("México");
+
+  // Multi-state selection state
+  const [selectedStates, setSelectedStates] = useState<string[]>([
+    "Ciudad de México (CDMX)",
+    "Jalisco",
+    "Nuevo León",
+  ]);
+  const [stateSearchQuery, setStateSearchQuery] = useState("");
+  const [selectedRegionTab, setSelectedRegionTab] = useState<string>("Todos");
+  const [isStateSelectorExpanded, setIsStateSelectorExpanded] = useState(false);
+  const [activePortalState, setActivePortalState] = useState<string>("");
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<JobSearchResult | null>(null);
 
-  // Platform Filter
+  // Platform and Location Filters for results
   const [selectedPlatform, setSelectedPlatform] = useState<string>("todos");
+  const [selectedLocationFilter, setSelectedLocationFilter] = useState<string>("todos");
 
   // Tailor CV Modal State
   const [cvJob, setCvJob] = useState<JobMatch | null>(null);
@@ -93,37 +159,112 @@ function Empleos() {
   const [pastedJobTitle, setPastedJobTitle] = useState("");
   const [pastedJobDescription, setPastedJobDescription] = useState("");
 
-  // Portal links helper based on detected or placeholder role
+  const isAllRepublic =
+    selectedStates.length === 0 ||
+    selectedStates.includes("Toda la República") ||
+    selectedStates.some((s) => s.toLowerCase().includes("toda"));
+
+  // Toggle individual state
+  const toggleState = (stateName: string) => {
+    if (stateName === "Toda la República") {
+      setSelectedStates(["Toda la República"]);
+      return;
+    }
+    setSelectedStates((prev) => {
+      const clean = prev.filter((s) => s !== "Toda la República");
+      if (clean.includes(stateName)) {
+        const next = clean.filter((s) => s !== stateName);
+        return next.length === 0 ? ["Toda la República"] : next;
+      } else {
+        return [...clean, stateName];
+      }
+    });
+  };
+
+  const removeState = (stateName: string) => {
+    setSelectedStates((prev) => {
+      const next = prev.filter((s) => s !== stateName);
+      return next.length === 0 ? ["Toda la República"] : next;
+    });
+  };
+
+  const clearAllStates = () => {
+    setSelectedStates(["Toda la República"]);
+  };
+
+  // Filtered states list based on search and region tab
+  const filteredStatesList = useMemo(() => {
+    return MEXICAN_STATES.filter((st) => {
+      const matchesRegion = selectedRegionTab === "Todos" || st.region === selectedRegionTab;
+      const q = stateSearchQuery.trim().toLowerCase();
+      const matchesQuery =
+        !q || st.name.toLowerCase().includes(q) || st.short.toLowerCase().includes(q);
+      return matchesRegion && matchesQuery;
+    });
+  }, [selectedRegionTab, stateSearchQuery]);
+
+  // Detected role
   const detectedRole = result?.profile?.title || "Tu puesto objetivo";
+
+  // Location for portal links
+  const currentPortalLocation = useMemo(() => {
+    if (activePortalState && selectedStates.includes(activePortalState)) {
+      return activePortalState;
+    }
+    if (selectedStates.length > 0 && !isAllRepublic) {
+      return selectedStates[0];
+    }
+    return "México";
+  }, [activePortalState, selectedStates, isAllRepublic]);
+
   const portals = useMemo(() => {
-    return buildMexicanPortalUrls(detectedRole, location);
-  }, [detectedRole, location]);
+    return buildMexicanPortalUrls(detectedRole, currentPortalLocation);
+  }, [detectedRole, currentPortalLocation]);
+
+  // Unique locations in returned jobs
+  const availableResultLocations = useMemo(() => {
+    if (!result?.jobs) return [];
+    const locs = new Set<string>();
+    for (const j of result.jobs) {
+      if (j.location) {
+        locs.add(j.location);
+      }
+    }
+    return Array.from(locs);
+  }, [result?.jobs]);
 
   // Filtered jobs
   const filteredJobs = useMemo(() => {
     if (!result?.jobs) return [];
-    if (selectedPlatform === "todos") return result.jobs;
-    if (selectedPlatform === "computrabajo") {
-      return result.jobs.filter((j) => j.source.toLowerCase().includes("computrabajo"));
-    }
-    if (selectedPlatform === "occ") {
-      return result.jobs.filter((j) => j.source.toLowerCase().includes("occ"));
-    }
-    if (selectedPlatform === "indeed") {
-      return result.jobs.filter((j) => j.source.toLowerCase().includes("indeed"));
-    }
-    if (selectedPlatform === "linkedin") {
-      return result.jobs.filter((j) => j.source.toLowerCase().includes("linkedin"));
-    }
-    if (selectedPlatform === "remoto") {
-      return result.jobs.filter(
-        (j) =>
+    return result.jobs.filter((j) => {
+      // Platform filter
+      if (selectedPlatform === "computrabajo" && !j.source.toLowerCase().includes("computrabajo")) {
+        return false;
+      }
+      if (selectedPlatform === "occ" && !j.source.toLowerCase().includes("occ")) {
+        return false;
+      }
+      if (selectedPlatform === "indeed" && !j.source.toLowerCase().includes("indeed")) {
+        return false;
+      }
+      if (selectedPlatform === "linkedin" && !j.source.toLowerCase().includes("linkedin")) {
+        return false;
+      }
+      if (selectedPlatform === "remoto") {
+        const isRem =
           j.location.toLowerCase().includes("remot") ||
-          (j.modality && j.modality.toLowerCase().includes("remot")),
-      );
-    }
-    return result.jobs;
-  }, [result?.jobs, selectedPlatform]);
+          (j.modality && j.modality.toLowerCase().includes("remot"));
+        if (!isRem) return false;
+      }
+
+      // Location filter
+      if (selectedLocationFilter !== "todos" && j.location !== selectedLocationFilter) {
+        return false;
+      }
+
+      return true;
+    });
+  }, [result?.jobs, selectedPlatform, selectedLocationFilter]);
 
   // Platform counts
   const platformCounts = useMemo(() => {
@@ -224,11 +365,13 @@ function Empleos() {
         data: {
           cvText: cvText.trim() || null,
           pdfBase64,
-          location: location.trim() || "México",
+          locations: selectedStates,
+          location: selectedStates.join(", "),
         },
       });
       setResult(r);
       setSelectedPlatform("todos");
+      setSelectedLocationFilter("todos");
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se pudo completar la búsqueda en México.");
     } finally {
@@ -238,7 +381,7 @@ function Empleos() {
 
   return (
     <div className="min-h-screen bg-background text-ink font-display">
-      <div className="mx-auto max-w-[1240px] px-4 sm:px-6 py-6 space-y-6">
+      <div className="mx-auto max-w-[1260px] px-4 sm:px-6 py-6 space-y-6">
         {/* Navigation Top Bar */}
         <header className="flex items-center justify-between rounded-2xl bg-surface ring-1 ring-black/5 px-4 py-3 shadow-xs">
           <Link to="/" className="flex items-center gap-3">
@@ -259,7 +402,8 @@ function Empleos() {
               className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-line bg-surface text-ink hover:bg-background transition-colors flex items-center gap-1.5"
             >
               <ClipboardPaste className="size-3.5 text-accent" />
-              <span>Pegar vacante de CompuTrabajo / OCC</span>
+              <span className="hidden sm:inline">Pegar vacante de CompuTrabajo / OCC</span>
+              <span className="sm:hidden">Importar</span>
             </button>
             <Link
               to="/analizador"
@@ -276,19 +420,20 @@ function Empleos() {
           </div>
         </header>
 
-        {/* Hero Banner for Mexico */}
+        {/* Hero Banner for Mexico Multi-State */}
         <div className="rounded-2xl bg-gradient-to-r from-emerald-500/10 via-accent/5 to-blue-500/10 border border-emerald-500/20 p-5 sm:p-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="space-y-1">
             <div className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-500/15 text-emerald-800 dark:text-emerald-300 border border-emerald-500/20">
               <span className="text-base leading-none">🇲🇽</span>
-              <span>Búsqueda Exclusiva en México</span>
+              <span>Búsqueda Multi-Estado en la República Mexicana</span>
             </div>
             <h1 className="text-xl sm:text-2xl font-bold tracking-tight">
               Vacantes en CompuTrabajo, OCCMundial e Indeed
             </h1>
             <p className="text-sm text-muted max-w-2xl">
-              Compara tu CV contra ofertas activas en la República Mexicana y obtén tu porcentaje de
-              coincidencia ATS, prestaciones y salario en MXN.
+              Selecciona uno o varios estados de México para buscar simultáneamente. El algoritmo de
+              IA distribuye y evalúa ofertas en tus zonas geográficas preferidas con puntuación de
+              coincidencia.
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
@@ -298,14 +443,14 @@ function Empleos() {
               className="text-xs font-semibold px-3.5 py-2 rounded-xl bg-surface border border-line hover:border-accent text-ink shadow-xs transition-colors flex items-center gap-2"
             >
               <ClipboardPaste className="size-4 text-emerald-600" />
-              <span>Importar de CompuTrabajo / OCC</span>
+              <span>Importar vacante directa</span>
             </button>
           </div>
         </div>
 
         {/* Main Grid: CV input column + Results column */}
-        <div className="grid gap-6 lg:grid-cols-[390px_1fr]">
-          {/* Left Column: CV Input & Location Controls */}
+        <div className="grid gap-6 lg:grid-cols-[420px_1fr]">
+          {/* Left Column: CV Input & Multi-State Selector */}
           <section className="rounded-2xl bg-surface ring-1 ring-black/5 p-5 space-y-4 h-fit shadow-xs">
             <div>
               <div className={label}>Paso 1 · Tu Currículum</div>
@@ -341,49 +486,202 @@ function Empleos() {
             <textarea
               value={cvText}
               onChange={(e) => setCvText(e.target.value)}
-              rows={6}
+              rows={5}
               placeholder="Pega aquí tu experiencia laboral, educación y habilidades técnicas..."
               className="w-full rounded-xl bg-background border border-line p-3 text-sm outline-none focus:border-accent resize-y"
             />
 
-            {/* Mexico Location Selector */}
-            <div className="space-y-2 pt-2 border-t border-line">
+            {/* Step 2: Multi-State Selector in Mexico */}
+            <div className="space-y-3 pt-3 border-t border-line">
               <div className="flex items-center justify-between">
-                <div className={label}>Paso 2 · Ubicación en México</div>
-                <span className="text-[11px] text-emerald-700 dark:text-emerald-400 font-medium">
-                  🇲🇽 Solo México
-                </span>
-              </div>
-
-              <div className="relative">
-                <MapPin className="size-4 absolute left-3 top-3 text-muted" />
-                <input
-                  value={location}
-                  onChange={(e) => setLocation(e.target.value)}
-                  placeholder="Ej. CDMX, Guadalajara, Monterrey o Remoto..."
-                  className="w-full rounded-xl bg-background border border-line pl-9 pr-3 py-2.5 text-sm outline-none focus:border-accent"
-                />
-              </div>
-
-              {/* Quick Mexican Presets */}
-              <div className="space-y-1">
-                <div className="text-[11px] text-muted font-medium">Sugerencias rápidas:</div>
-                <div className="flex flex-wrap gap-1.5">
-                  {MEXICAN_REGIONS.map((reg) => (
-                    <button
-                      key={reg.code}
-                      type="button"
-                      onClick={() => setLocation(reg.label)}
-                      className={`text-[11px] px-2.5 py-1 rounded-lg border transition-colors ${
-                        location === reg.label
-                          ? "bg-accent text-accent-foreground border-accent font-semibold"
-                          : "bg-background border-line text-muted hover:text-ink hover:border-muted"
-                      }`}
-                    >
-                      {reg.label.replace(" (México)", "")}
-                    </button>
-                  ))}
+                <div>
+                  <div className={label}>Paso 2 · Selección de Estados en México</div>
+                  <div className="text-xs font-semibold text-ink mt-0.5 flex items-center gap-1.5">
+                    <MapPin className="size-3.5 text-emerald-600" />
+                    <span>
+                      {isAllRepublic
+                        ? "Toda la República Mexicana"
+                        : `${selectedStates.length} estado${selectedStates.length > 1 ? "s" : ""} seleccionado${selectedStates.length > 1 ? "s" : ""}`}
+                    </span>
+                  </div>
                 </div>
+
+                {!isAllRepublic && (
+                  <button
+                    type="button"
+                    onClick={clearAllStates}
+                    className="text-[11px] text-muted hover:text-destructive flex items-center gap-1 transition-colors"
+                  >
+                    <RotateCcw className="size-3" />
+                    <span>Restablecer</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Active Selected States Chips */}
+              <div className="flex flex-wrap gap-1.5 min-h-[32px] p-2 rounded-xl bg-background/60 border border-line">
+                {isAllRepublic ? (
+                  <div className="flex items-center gap-1.5 text-xs text-muted font-medium px-2 py-0.5">
+                    <span>🇲🇽</span>
+                    <span>Búsqueda abierta en toda la República Mexicana</span>
+                  </div>
+                ) : (
+                  selectedStates.map((st) => (
+                    <span
+                      key={st}
+                      className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-lg bg-accent text-accent-foreground shadow-2xs"
+                    >
+                      <span>
+                        {st
+                          .replace(" (CDMX)", "")
+                          .replace(" (Edomex)", "")
+                          .replace(" (México)", "")}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => removeState(st)}
+                        className="hover:opacity-75 p-0.5 -mr-0.5"
+                        title={`Quitar ${st}`}
+                      >
+                        <X className="size-3" />
+                      </button>
+                    </span>
+                  ))
+                )}
+              </div>
+
+              {/* Quick Preset Buttons */}
+              <div className="space-y-1.5">
+                <div className="text-[11px] text-muted font-medium">
+                  Combinaciones rápidas por zona:
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {STATE_PRESETS.map((preset) => {
+                    const isActive =
+                      preset.states.length === selectedStates.length &&
+                      preset.states.every((s) => selectedStates.includes(s));
+
+                    return (
+                      <button
+                        key={preset.name}
+                        type="button"
+                        onClick={() => setSelectedStates([...preset.states])}
+                        className={`text-[11px] px-2.5 py-1 rounded-lg border transition-all flex items-center gap-1 cursor-pointer ${
+                          isActive
+                            ? "bg-emerald-600 text-white border-emerald-600 font-semibold shadow-xs"
+                            : "bg-background border-line text-muted hover:text-ink hover:border-muted"
+                        }`}
+                      >
+                        <span>{preset.icon}</span>
+                        <span>{preset.name}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Collapsible / Expandable Full State Selector */}
+              <div className="rounded-xl border border-line bg-background overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setIsStateSelectorExpanded((v) => !v)}
+                  className="w-full p-2.5 text-xs font-semibold text-ink flex items-center justify-between hover:bg-surface/80 transition-colors"
+                >
+                  <div className="flex items-center gap-2">
+                    <Layers className="size-3.5 text-accent" />
+                    <span>Explorar los 32 Estados de la República</span>
+                  </div>
+                  <div className="flex items-center gap-1 text-muted text-[11px]">
+                    <span>{isStateSelectorExpanded ? "Ocultar lista" : "Mostrar selector"}</span>
+                    {isStateSelectorExpanded ? (
+                      <ChevronUp className="size-3.5" />
+                    ) : (
+                      <ChevronDown className="size-3.5" />
+                    )}
+                  </div>
+                </button>
+
+                {isStateSelectorExpanded && (
+                  <div className="p-3 border-t border-line space-y-3 bg-surface/50">
+                    {/* Search and Region Filter */}
+                    <div className="space-y-2">
+                      <div className="relative">
+                        <Search className="size-3.5 absolute left-2.5 top-2.5 text-muted" />
+                        <input
+                          value={stateSearchQuery}
+                          onChange={(e) => setStateSearchQuery(e.target.value)}
+                          placeholder="Buscar estado (ej. Jalisco, Puebla, Yucatán)..."
+                          className="w-full rounded-lg bg-background border border-line pl-8 pr-2.5 py-1.5 text-xs outline-none focus:border-accent"
+                        />
+                      </div>
+
+                      {/* Region Tabs */}
+                      <div className="flex items-center gap-1 overflow-x-auto pb-1 text-[11px]">
+                        {REGION_TABS.map((tab) => (
+                          <button
+                            key={tab}
+                            type="button"
+                            onClick={() => setSelectedRegionTab(tab)}
+                            className={`px-2 py-0.5 rounded-md whitespace-nowrap transition-colors ${
+                              selectedRegionTab === tab
+                                ? "bg-accent text-accent-foreground font-semibold"
+                                : "text-muted hover:text-ink hover:bg-background"
+                            }`}
+                          >
+                            {tab}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* States Grid */}
+                    <div className="grid grid-cols-2 gap-1.5 max-h-56 overflow-y-auto pr-1">
+                      {filteredStatesList.map((st) => {
+                        const isSelected = selectedStates.includes(st.name);
+
+                        return (
+                          <button
+                            key={st.code}
+                            type="button"
+                            onClick={() => toggleState(st.name)}
+                            className={`p-1.5 rounded-lg border text-left text-xs transition-all flex items-center justify-between gap-1.5 ${
+                              isSelected
+                                ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-900 dark:text-emerald-200 font-semibold"
+                                : "bg-background border-line text-muted hover:text-ink hover:border-muted"
+                            }`}
+                          >
+                            <div className="min-w-0 flex-1 leading-tight truncate">
+                              <span className="truncate block">{st.short}</span>
+                              <span className="text-[9px] text-muted block opacity-75">
+                                {st.region}
+                              </span>
+                            </div>
+                            <div
+                              className={`size-4 rounded flex items-center justify-center border shrink-0 ${
+                                isSelected
+                                  ? "bg-emerald-600 border-emerald-600 text-white"
+                                  : "border-line bg-surface"
+                              }`}
+                            >
+                              {isSelected && <Check className="size-2.5 stroke-[3]" />}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <div className="flex items-center justify-between text-[11px] text-muted pt-1 border-t border-line">
+                      <span>{filteredStatesList.length} estados en este filtro</span>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedStates(["Toda la República"])}
+                        className="text-accent font-semibold hover:underline"
+                      >
+                        Seleccionar Todo México
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -401,7 +699,9 @@ function Empleos() {
               ) : (
                 <>
                   <Sparkles className="size-4" />
-                  <span>Buscar vacantes en México</span>
+                  <span>
+                    Buscar en {isAllRepublic ? "todo México" : `${selectedStates.length} estados`}
+                  </span>
                 </>
               )}
             </button>
@@ -417,18 +717,49 @@ function Empleos() {
           <section className="space-y-5">
             {/* Live Mexican Portals Quick Search Bar */}
             <div className="rounded-2xl bg-surface ring-1 ring-black/5 p-4 sm:p-5 shadow-xs space-y-3">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <div>
                   <div className={label}>Bolsas de Trabajo en México</div>
                   <h3 className="text-base font-semibold">
                     Abrir búsquedas directas en portales líderes
                   </h3>
                 </div>
-                <span className="text-xs text-muted font-mono hidden sm:inline">
-                  {detectedRole} · {location || "México"}
-                </span>
+                <div className="text-xs text-muted font-mono flex items-center gap-1.5">
+                  <span className="font-semibold text-ink">{detectedRole}</span>
+                  <span>·</span>
+                  <span className="text-emerald-700 dark:text-emerald-400 font-semibold">
+                    {currentPortalLocation}
+                  </span>
+                </div>
               </div>
 
+              {/* State Switcher for Direct Portal Searches */}
+              {selectedStates.length > 1 && !isAllRepublic && (
+                <div className="flex items-center gap-1.5 flex-wrap pt-1 border-t border-line/60">
+                  <span className="text-[11px] text-muted font-medium mr-1">
+                    Ver enlaces directos para:
+                  </span>
+                  {selectedStates.map((st) => {
+                    const isCurrent = currentPortalLocation === st;
+                    return (
+                      <button
+                        key={st}
+                        type="button"
+                        onClick={() => setActivePortalState(st)}
+                        className={`text-xs px-2.5 py-1 rounded-lg border transition-colors ${
+                          isCurrent
+                            ? "bg-accent text-accent-foreground border-accent font-semibold shadow-2xs"
+                            : "bg-background border-line text-muted hover:text-ink"
+                        }`}
+                      >
+                        {st.replace(" (CDMX)", "").replace(" (Edomex)", "")}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Portal Links Grid */}
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5">
                 {portals.map((p) => (
                   <a
@@ -464,11 +795,12 @@ function Empleos() {
                 </div>
                 <div className="space-y-1">
                   <h3 className="text-base font-semibold">
-                    Vacantes de CompuTrabajo y OCC seleccionadas para ti
+                    Vacantes de CompuTrabajo y OCC seleccionadas para tus estados
                   </h3>
                   <p className="text-sm text-muted max-w-md mx-auto">
-                    Sube o pega tu CV a la izquierda y calcularemos la coincidencia exacta de cada
-                    oferta del mercado mexicano contra tus habilidades.
+                    Selecciona tus estados preferidos de la República Mexicana a la izquierda y sube
+                    tu CV. Analizaremos las ofertas laborales y calcularemos la coincidencia ATS
+                    exacta.
                   </p>
                 </div>
               </div>
@@ -480,11 +812,16 @@ function Empleos() {
                 <RefreshCw className="size-8 text-accent animate-spin mx-auto" />
                 <div className="space-y-1">
                   <div className="text-base font-semibold">
-                    Escaneando vacantes en México y evaluando tu CV...
+                    Escaneando vacantes en{" "}
+                    {isAllRepublic ? "México" : `${selectedStates.length} estados`} y evaluando tu
+                    CV...
                   </div>
                   <p className="text-xs text-muted max-w-md mx-auto">
-                    Analizando puestos en CompuTrabajo, OCCMundial, Indeed y ofertas remotas.
-                    Calculando porcentaje de coincidencia con IA.
+                    Consultando CompuTrabajo, OCCMundial, Indeed y ofertas remotas para:{" "}
+                    <span className="font-semibold text-ink">
+                      {isAllRepublic ? "Toda la República" : selectedStates.join(", ")}
+                    </span>
+                    .
                   </p>
                 </div>
               </div>
@@ -501,6 +838,14 @@ function Empleos() {
                       <div className="text-lg font-bold text-ink mt-0.5">
                         {result.profile.title} ·{" "}
                         <span className="text-muted font-normal">{result.profile.seniority}</span>
+                      </div>
+                      <div className="text-xs text-emerald-700 dark:text-emerald-400 font-medium mt-1 flex items-center gap-1.5">
+                        <MapPin className="size-3.5" />
+                        <span>
+                          {isAllRepublic
+                            ? "Búsqueda en toda la República Mexicana"
+                            : `Estados seleccionados: ${selectedStates.join(", ")} (${selectedStates.length})`}
+                        </span>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
@@ -527,8 +872,9 @@ function Empleos() {
                   </div>
                 </div>
 
-                {/* Platform Filter Tabs */}
-                <div className="flex items-center justify-between gap-2 flex-wrap border-b border-line pb-2">
+                {/* Filter Tabs: Platform & Location Filter */}
+                <div className="space-y-2 border-b border-line pb-3">
+                  {/* Platform Filter */}
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <button
                       type="button"
@@ -578,13 +924,48 @@ function Empleos() {
                       <span>100% Remoto ({platformCounts.remoto})</span>
                     </button>
                   </div>
+
+                  {/* Location Filter if diverse results */}
+                  {availableResultLocations.length > 1 && (
+                    <div className="flex items-center gap-1.5 flex-wrap text-xs pt-1">
+                      <span className="text-[11px] text-muted font-medium flex items-center gap-1">
+                        <Filter className="size-3 text-muted" />
+                        <span>Filtrar por ciudad/estado:</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedLocationFilter("todos")}
+                        className={`text-[11px] px-2 py-0.5 rounded-md transition-colors ${
+                          selectedLocationFilter === "todos"
+                            ? "bg-accent text-accent-foreground font-semibold"
+                            : "bg-background border border-line text-muted hover:text-ink"
+                        }`}
+                      >
+                        Todas
+                      </button>
+                      {availableResultLocations.map((loc) => (
+                        <button
+                          key={loc}
+                          type="button"
+                          onClick={() => setSelectedLocationFilter(loc)}
+                          className={`text-[11px] px-2 py-0.5 rounded-md transition-colors ${
+                            selectedLocationFilter === loc
+                              ? "bg-accent text-accent-foreground font-semibold"
+                              : "bg-background border border-line text-muted hover:text-ink"
+                          }`}
+                        >
+                          {loc}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {/* Jobs List */}
                 {filteredJobs.length === 0 ? (
                   <div className="rounded-2xl bg-surface ring-1 ring-black/5 p-8 text-center text-sm text-muted">
-                    No hay vacantes con el filtro "{selectedPlatform}". Selecciona "Todos" para ver
-                    las ofertas disponibles.
+                    No hay vacantes con los filtros seleccionados. Prueba cambiando la plataforma o
+                    la ubicación.
                   </div>
                 ) : (
                   filteredJobs.map((j) => {
@@ -648,8 +1029,8 @@ function Empleos() {
                                 {j.company}
                               </span>
                               <span>·</span>
-                              <span className="flex items-center gap-1">
-                                <MapPin className="size-3.5 text-muted" />
+                              <span className="flex items-center gap-1 text-ink font-medium">
+                                <MapPin className="size-3.5 text-emerald-600" />
                                 {j.location}
                               </span>
                               {j.salary && (
@@ -685,7 +1066,7 @@ function Empleos() {
 
                               <button
                                 onClick={() => handleSendToAnalyzer(j)}
-                                className="rounded-xl border border-line bg-background hover:border-accent px-3 py-1.5 text-xs font-semibold text-accent flex items-center gap-1.5 transition-colors"
+                                className="rounded-xl border border-line bg-background hover:border-accent px-3 py-1.5 text-xs font-semibold text-accent flex items-center gap-1.5 transition-colors cursor-pointer"
                               >
                                 <span>Analizar en Analizador ATS</span>
                                 <ArrowRight className="size-3" />
@@ -693,7 +1074,7 @@ function Empleos() {
 
                               <button
                                 onClick={() => makeCv(j)}
-                                className="rounded-xl bg-accent text-accent-foreground px-3.5 py-1.5 text-xs font-semibold hover:opacity-90 transition-opacity ml-auto"
+                                className="rounded-xl bg-accent text-accent-foreground px-3.5 py-1.5 text-xs font-semibold hover:opacity-90 transition-opacity ml-auto cursor-pointer"
                               >
                                 Adaptar mi CV a esta vacante
                               </button>
@@ -777,13 +1158,13 @@ function Empleos() {
                       setCopiedCv(true);
                       setTimeout(() => setCopiedCv(false), 3000);
                     }}
-                    className="rounded-xl border border-line bg-background hover:bg-surface px-4 py-2 text-xs font-semibold"
+                    className="rounded-xl border border-line bg-background hover:bg-surface px-4 py-2 text-xs font-semibold cursor-pointer"
                   >
                     Copiar texto
                   </button>
                   <button
                     onClick={printCv}
-                    className="rounded-xl bg-accent text-accent-foreground px-4 py-2 text-xs font-semibold flex items-center gap-1.5"
+                    className="rounded-xl bg-accent text-accent-foreground px-4 py-2 text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
                   >
                     <Printer className="size-3.5" />
                     <span>Descargar PDF</span>
@@ -860,7 +1241,7 @@ function Empleos() {
                 <button
                   type="submit"
                   disabled={!pastedJobDescription.trim()}
-                  className="px-4 py-2 text-xs font-semibold rounded-xl bg-accent text-accent-foreground disabled:opacity-50 flex items-center gap-1.5"
+                  className="px-4 py-2 text-xs font-semibold rounded-xl bg-accent text-accent-foreground disabled:opacity-50 flex items-center gap-1.5 cursor-pointer"
                 >
                   <span>Abrir en Analizador ATS</span>
                   <ArrowRight className="size-3.5" />

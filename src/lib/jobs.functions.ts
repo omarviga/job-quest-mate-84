@@ -1,26 +1,57 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 
-const MEXICAN_REGIONS = [
-  { code: "all", label: "Toda la República (México)" },
-  { code: "remoto", label: "Remoto (México)" },
-  { code: "cdmx", label: "Ciudad de México (CDMX)" },
-  { code: "gdl", label: "Guadalajara, Jalisco" },
-  { code: "mty", label: "Monterrey, Nuevo León" },
-  { code: "qro", label: "Querétaro, Qro." },
-  { code: "pue", label: "Puebla, Pue." },
-  { code: "mer", label: "Mérida, Yucatán" },
-  { code: "tij", label: "Tijuana, Baja California" },
-  { code: "tol", label: "Toluca / Estado de México" },
-  { code: "leon", label: "León, Guanajuato" },
-] as const;
+export interface MexicanState {
+  code: string;
+  name: string;
+  short: string;
+  region: "Centro" | "Norte" | "Bajío" | "Occidente" | "Sur/Sureste" | "General";
+}
 
-export { MEXICAN_REGIONS };
+export const MEXICAN_STATES: MexicanState[] = [
+  { code: "all", name: "Toda la República", short: "Todo México", region: "General" },
+  { code: "remoto", name: "Remoto (México)", short: "Remoto", region: "General" },
+  { code: "cdmx", name: "Ciudad de México (CDMX)", short: "CDMX", region: "Centro" },
+  { code: "mex", name: "Estado de México (Edomex)", short: "Edomex", region: "Centro" },
+  { code: "jal", name: "Jalisco", short: "Jalisco", region: "Occidente" },
+  { code: "nl", name: "Nuevo León", short: "Nuevo León", region: "Norte" },
+  { code: "qro", name: "Querétaro", short: "Querétaro", region: "Bajío" },
+  { code: "pue", name: "Puebla", short: "Puebla", region: "Centro" },
+  { code: "gto", name: "Guanajuato", short: "Guanajuato", region: "Bajío" },
+  { code: "yuc", name: "Yucatán", short: "Yucatán", region: "Sur/Sureste" },
+  { code: "bc", name: "Baja California", short: "Baja California", region: "Norte" },
+  { code: "bcs", name: "Baja California Sur", short: "BCS", region: "Norte" },
+  { code: "ags", name: "Aguascalientes", short: "Aguascalientes", region: "Bajío" },
+  { code: "coah", name: "Coahuila", short: "Coahuila", region: "Norte" },
+  { code: "chih", name: "Chihuahua", short: "Chihuahua", region: "Norte" },
+  { code: "son", name: "Sonora", short: "Sonora", region: "Norte" },
+  { code: "slp", name: "San Luis Potosí", short: "San Luis Potosí", region: "Bajío" },
+  { code: "qroo", name: "Quintana Roo", short: "Cancún / Q. Roo", region: "Sur/Sureste" },
+  { code: "ver", name: "Veracruz", short: "Veracruz", region: "Sur/Sureste" },
+  { code: "mor", name: "Morelos", short: "Morelos", region: "Centro" },
+  { code: "hgo", name: "Hidalgo", short: "Hidalgo", region: "Centro" },
+  { code: "sin", name: "Sinaloa", short: "Sinaloa", region: "Norte" },
+  { code: "tamps", name: "Tamaulipas", short: "Tamaulipas", region: "Norte" },
+  { code: "mich", name: "Michoacán", short: "Michoacán", region: "Occidente" },
+  { code: "col", name: "Colima", short: "Colima", region: "Occidente" },
+  { code: "nay", name: "Nayarit", short: "Nayarit", region: "Occidente" },
+  { code: "dgo", name: "Durango", short: "Durango", region: "Norte" },
+  { code: "zac", name: "Zacatecas", short: "Zacatecas", region: "Bajío" },
+  { code: "cam", name: "Campeche", short: "Campeche", region: "Sur/Sureste" },
+  { code: "chis", name: "Chiapas", short: "Chiapas", region: "Sur/Sureste" },
+  { code: "tab", name: "Tabasco", short: "Tabasco", region: "Sur/Sureste" },
+  { code: "oax", name: "Oaxaca", short: "Oaxaca", region: "Sur/Sureste" },
+  { code: "gro", name: "Guerrero", short: "Guerrero", region: "Sur/Sureste" },
+  { code: "tlax", name: "Tlaxcala", short: "Tlaxcala", region: "Centro" },
+];
+
+export const MEXICAN_REGIONS = MEXICAN_STATES;
 
 const Input = z.object({
   cvText: z.string().max(40000).nullable(),
   pdfBase64: z.string().max(14_000_000).nullable(),
-  location: z.string().max(80).nullable(),
+  location: z.string().max(1000).nullable().optional(),
+  locations: z.array(z.string()).optional(),
 });
 
 export type JobMatch = {
@@ -310,26 +341,41 @@ async function fetchArbeitnow(terms: string[]): Promise<RawJob[]> {
 
 async function generateMexicanPortalJobs(
   profile: { title: string; seniority: string; summary: string; keywords: string[] },
-  location: string | null,
+  locationStr: string | null,
+  selectedStates: string[] = [],
 ): Promise<RawJob[]> {
   const { generateGeminiContent, Type } = await import("./gemini.server");
 
-  const targetLocation = location?.trim() || "México (CDMX / Guadalajara / Monterrey / Remoto)";
+  const isMultiState = selectedStates.length > 1;
+  const isAllRepublic =
+    selectedStates.length === 0 ||
+    selectedStates.some((s) => s.toLowerCase().includes("toda") || s.toLowerCase() === "all");
+
+  const locationDescription = isAllRepublic
+    ? "Toda la República Mexicana (diversas ciudades como CDMX, Guadalajara, Monterrey, Querétaro, y esquemas Remotos)"
+    : isMultiState
+      ? `Los siguientes estados seleccionados por el candidato: ${selectedStates.join(", ")}`
+      : locationStr?.trim() || "México";
+
+  const distributionInstruction = isMultiState
+    ? `IMPORTANTE - DISTRIBUCIÓN MULTI-ESTADO: El candidato seleccionó específicamente estos estados de México: ${selectedStates.join(", ")}.
+Debes generar vacantes distribuidas equitativamente entre los diferentes estados seleccionados. Cada vacante debe indicar claramente en 'location' la ciudad y el estado correspondiente (ej. "Guadalajara, Jalisco", "Monterrey, Nuevo León", "Querétaro, Qro.", "Puebla, Pue.", "Remoto (México)").`
+    : `Ubicación deseada en México: ${locationDescription}.`;
 
   const prompt = `Actúa como reclutador senior y especialista en el mercado laboral en MÉXICO.
 Para el siguiente perfil profesional:
 - Puesto objetivo: ${profile.title} (${profile.seniority})
 - Resumen profesional: ${profile.summary}
 - Habilidades clave: ${profile.keywords.join(", ")}
-- Ubicación deseada en México: ${targetLocation}
+- ${distributionInstruction}
 
-Genera exactamente 6 ofertas de empleo reales y atractivas del mercado mexicano actual, alternando equitativamente entre las dos bolsas de trabajo más usadas en México:
+Genera entre 6 y 8 ofertas de empleo reales y atractivas del mercado mexicano actual, alternando equitativamente entre las dos bolsas de trabajo más usadas en México:
 - "CompuTrabajo" (bolsa líder en México, portal mx.computrabajo.com)
 - "OCCMundial" (bolsa líder en México para profesionistas y especialistas, portal occ.com.mx)
 
 Requisitos indispensables:
-1. Empresas reales y reconocidas que operan y contratan activamente en México (ejemplos: BBVA México, Softtek, Mercado Libre México, Wizeline, Grupo Bimbo, Banorte, Coppel, Kavak, Liverpool, Kueski, Nubank México, Femsa, etc.).
-2. Ubicaciones realistas en la República Mexicana según la preferencia (ejemplos: "Ciudad de México (Santa Fe / Híbrido)", "Guadalajara, Jal.", "Monterrey, N.L. (San Pedro)", "Querétaro, Qro.", "Remoto (México)").
+1. Empresas reales y reconocidas que operan y contratan activamente en México (ejemplos: BBVA México, Softtek, Mercado Libre México, Wizeline, Grupo Bimbo, Banorte, Coppel, Kavak, Liverpool, Kueski, Nubank México, Femsa, Ternium, Cinepolis, etc.).
+2. Ubicaciones realistas en la República Mexicana según los estados seleccionados (${locationDescription}).
 3. Rango salarial mensual realista en pesos mexicanos (MXN) brutos con formato mexicano (ej. "$38,000 - $52,000 MXN mensuales").
 4. Descripción detallada del puesto que mencione funciones clave, requisitos técnicos de experiencia y paquete de prestaciones mexicanas (IMSS, Infonavit, aguinaldo 30 días, vales de despensa, fondo de ahorro, SGMM).
 5. Modalidad: "Presencial", "Híbrido" o "Remoto".
@@ -506,19 +552,38 @@ export const searchJobsForCv = createServerFn({ method: "POST" })
 
     const keywords = (profile.keywords ?? []).slice(0, 5);
 
+    // 2. Resolver selección de múltiples estados de México
+    const rawLocations =
+      data.locations && data.locations.length > 0
+        ? data.locations
+        : data.location?.trim()
+          ? data.location
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean)
+          : ["México"];
+
+    const isAllRepublic = rawLocations.some(
+      (l) => l.toLowerCase().includes("toda") || l.toLowerCase() === "all",
+    );
+    const selectedStates = isAllRepublic ? ["Toda la República (México)"] : rawLocations;
+    const locationStr = selectedStates.join(", ");
+
     // 2. Vacantes en México — CompuTrabajo, OCCMundial, APIs y agregadores con filtro estricto México
     console.log(
-      `[Search México] perfil="${profile.title}", keywords=${keywords.join(",")}, location=${data.location || "México"}`,
+      `[Search México] perfil="${profile.title}", keywords=${keywords.join(",")}, locations=${locationStr}`,
     );
 
     const mexicanJobsPromise = ai
-      ? generateMexicanPortalJobs(profile, data.location)
+      ? generateMexicanPortalJobs(profile, locationStr, selectedStates)
       : Promise.resolve([]);
+
+    const primaryLocation = selectedStates[0] && !isAllRepublic ? selectedStates[0] : "México";
 
     const lists = await Promise.all([
       mexicanJobsPromise,
-      fetchJSearch(profile.title, data.location || "México"),
-      fetchAdzuna(profile.title, data.location, "mx"),
+      fetchJSearch(profile.title, primaryLocation),
+      fetchAdzuna(profile.title, primaryLocation, "mx"),
       fetchRemotive([profile.title, ...keywords.slice(0, 2)]),
       fetchArbeitnow(keywords).then((jobs) =>
         jobs.filter(
@@ -547,8 +612,8 @@ export const searchJobsForCv = createServerFn({ method: "POST" })
     let scores: Array<{ id: string; match: number; reason: string }> = [];
 
     if (ai) {
-      const scorePrompt = `Perfil del candidato: ${profile.title} (${profile.seniority}). ${profile.summary}. Habilidades: ${keywords.join(", ")}.${data.location ? ` Ubicación preferida en México: ${data.location}.` : " Ubicación en México."}
-Puntúa de 0 a 100 qué tan bien encaja cada vacante del mercado mexicano y da una razón breve y concreta (máx 15 palabras, en español).
+      const scorePrompt = `Perfil del candidato: ${profile.title} (${profile.seniority}). ${profile.summary}. Habilidades: ${keywords.join(", ")}. Estados seleccionados en México: ${locationStr}.
+Puntúa de 0 a 100 qué tan bien encaja cada vacante del mercado mexicano considerando perfil y afinidad geográfica con los estados indicados y da una razón breve y concreta (máx 15 palabras, en español).
 Vacantes:
 ${raw.map((j) => `[${j.id}] ${j.title} — ${j.company} (${j.location}) [${j.source}]: ${j.text}`).join("\n")}`;
 
