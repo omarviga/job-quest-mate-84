@@ -1,0 +1,6 @@
+{
+  "name": "RUMBO — Centro de control de tu búsqueda de empleo",
+  "description": "Rastrea tus postulaciones por etapa, mide tu coincidencia con cada vacante y adapta tu CV con IA.",
+  "permissions": [],
+  "capabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

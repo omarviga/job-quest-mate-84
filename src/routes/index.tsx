@@ -70,7 +70,6 @@ function Index() {
         return { ...rest, stage: advanceTo };
       }),
     );
-
   }
 
   function addApplication() {

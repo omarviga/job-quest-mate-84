@@ -83,6 +83,12 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
         content:
           "Rastrea tus postulaciones, mide tu coincidencia con cada vacante y adapta tu CV con IA.",
       },
+      { property: "og:title", content: "RUMBO — Centro de control de tu búsqueda de empleo" },
+      {
+        property: "og:description",
+        content:
+          "Rastrea tus postulaciones, mide tu coincidencia con cada vacante y adapta tu CV con IA.",
+      },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
     ],

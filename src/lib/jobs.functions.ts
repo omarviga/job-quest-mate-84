@@ -45,7 +45,11 @@ export type JobSearchResult = {
 
 type RawJob = Omit<JobMatch, "match" | "reason">;
 
-const strip = (s: string) => s.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+const strip = (s: string) =>
+  s
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 
 async function fetchRemotiveSingle(term: string): Promise<RawJob[]> {
   try {
@@ -56,8 +60,18 @@ async function fetchRemotiveSingle(term: string): Promise<RawJob[]> {
       console.warn(`[Remotive] HTTP ${r.status} para "${term}"`);
       return [];
     }
-    const j = (await r.json()) as { jobs?: any[] };
-    const results = (j.jobs ?? []).map((x: any) => ({
+    const j = (await r.json()) as {
+      jobs?: Array<{
+        id: string | number;
+        title: string;
+        company_name: string;
+        candidate_required_location?: string;
+        url: string;
+        publication_date?: string;
+        description?: string;
+      }>;
+    };
+    const results = (j.jobs ?? []).map((x) => ({
       id: `rm-${x.id}`,
       title: x.title,
       company: x.company_name,
@@ -80,14 +94,22 @@ async function fetchRemotive(terms: string[]): Promise<RawJob[]> {
   if (searches.length === 0) return [];
   const lists = await Promise.all(searches.map((t) => fetchRemotiveSingle(t)));
   const seen = new Set<string>();
-  
+
   // Filter for Mexico / Global remote
-  const validLocations = ["mexico", "méxico", "worldwide", "anywhere", "global", "americas", "latam"];
-  
+  const validLocations = [
+    "mexico",
+    "méxico",
+    "worldwide",
+    "anywhere",
+    "global",
+    "americas",
+    "latam",
+  ];
+
   return lists.flat().filter((j) => {
     if (seen.has(j.id)) return false;
     seen.add(j.id);
-    
+
     const loc = j.location.toLowerCase();
     return validLocations.some((v) => loc.includes(v));
   });
@@ -113,13 +135,25 @@ async function fetchJSearch(term: string, where: string | null = "México"): Pro
       console.warn(`[JSearch] HTTP ${r.status} para "${query}"`);
       return [];
     }
-    const j = (await r.json()) as { data?: any[] };
-    const results = (j.data ?? []).map((x: any) => ({
+    const j = (await r.json()) as {
+      data?: Array<{
+        job_id: string;
+        job_title: string;
+        employer_name: string;
+        job_city?: string;
+        job_state?: string;
+        job_apply_link?: string;
+        job_google_link?: string;
+        job_posted_at_datetime_utc?: string;
+        job_description?: string;
+      }>;
+    };
+    const results = (j.data ?? []).map((x) => ({
       id: `js-${x.job_id}`,
       title: x.job_title,
       company: x.employer_name,
       location: `${x.job_city || ""}, ${x.job_state || ""}, México`.replace(/^, |, $/g, "").trim(),
-      url: x.job_apply_link || x.job_google_link,
+      url: x.job_apply_link || x.job_google_link || "",
       source: "JSearch",
       posted: x.job_posted_at_datetime_utc?.slice(0, 10) ?? "",
       text: strip(x.job_description ?? "").slice(0, 500),
@@ -149,8 +183,18 @@ async function fetchAdzuna(term: string, where: string | null, country = "us"): 
       console.warn(`[Adzuna/${country}] HTTP ${r.status} para "${term}"`);
       return [];
     }
-    const j = (await r.json()) as { results?: any[] };
-    const results = (j.results ?? []).map((x: any) => ({
+    const j = (await r.json()) as {
+      results?: Array<{
+        id: string | number;
+        title?: string;
+        company?: { display_name?: string };
+        location?: { display_name?: string };
+        redirect_url: string;
+        created?: string;
+        description?: string;
+      }>;
+    };
+    const results = (j.results ?? []).map((x) => ({
       id: `az-${x.id}`,
       title: strip(x.title ?? ""),
       company: x.company?.display_name ?? "Empresa confidencial",
@@ -176,15 +220,27 @@ async function fetchArbeitnow(terms: string[]): Promise<RawJob[]> {
       console.warn(`[Arbeitnow] HTTP ${r.status}`);
       return [];
     }
-    const j = (await r.json()) as { data?: any[] };
+    const j = (await r.json()) as {
+      data?: Array<{
+        slug: string;
+        title: string;
+        company_name: string;
+        tags?: string[];
+        remote?: boolean;
+        location: string;
+        url: string;
+        created_at?: number;
+        description?: string;
+      }>;
+    };
     const ts = terms.map((t) => t.toLowerCase());
     const results = (j.data ?? [])
-      .filter((x: any) => {
+      .filter((x) => {
         const hay = `${x.title} ${(x.tags ?? []).join(" ")}`.toLowerCase();
         return ts.some((t) => hay.includes(t));
       })
       .slice(0, 15)
-      .map((x: any) => ({
+      .map((x) => ({
         id: `an-${x.slug}`,
         title: x.title,
         company: x.company_name,
@@ -214,7 +270,10 @@ export const searchJobsForCv = createServerFn({ method: "POST" })
     const reasoningOptions = runtime.reasoningOptions;
 
     // 1. Perfil a partir del CV
-    const content: any[] = [
+    const content: Array<
+      | { type: "text"; text: string }
+      | { type: "file"; data: string; mediaType: string; filename: string }
+    > = [
       {
         type: "text",
         text: "Analiza este CV. Devuelve el puesto objetivo, seniority, un resumen de 1 frase en español y 3 a 5 términos de búsqueda cortos EN INGLÉS (1-2 palabras cada uno, p.ej. 'react', 'data engineer') ordenados por relevancia.",
@@ -222,7 +281,12 @@ export const searchJobsForCv = createServerFn({ method: "POST" })
     ];
     if (data.cvText?.trim()) content.push({ type: "text", text: `CV:\n${data.cvText}` });
     if (data.pdfBase64)
-      content.push({ type: "file", data: data.pdfBase64, mediaType: "application/pdf", filename: "cv.pdf" });
+      content.push({
+        type: "file",
+        data: data.pdfBase64,
+        mediaType: "application/pdf",
+        filename: "cv.pdf",
+      });
 
     const p = streamText({
       model,
@@ -235,23 +299,30 @@ export const searchJobsForCv = createServerFn({ method: "POST" })
           keywords: z.array(z.string()),
         }),
       }),
-      providerOptions: reasoningOptions as any,
+      ...(reasoningOptions ? { providerOptions: reasoningOptions } : {}),
     });
     const profile = await p.output;
     const keywords = profile.keywords.slice(0, 5);
 
     // 2. Vacantes reales — consultar todas las fuentes en paralelo con enfoque en México
-    console.log(`[Search] perfil="${profile.title}", keywords=${keywords.join(",")}, location=${data.location || "México"}`);
-    
+    console.log(
+      `[Search] perfil="${profile.title}", keywords=${keywords.join(",")}, location=${data.location || "México"}`,
+    );
+
     // Adzuna is removed from the active search because it doesn't support Mexico.
     // Instead, we rely on Remotive, Arbeitnow (which are filtered for remote/mexico), and JSearch.
     const lists = await Promise.all([
       fetchJSearch(profile.title, data.location),
       keywords[0] ? fetchJSearch(keywords[0], data.location) : Promise.resolve([]),
       fetchRemotive([profile.title, ...keywords.slice(0, 2)]),
-      fetchArbeitnow(keywords).then(jobs => 
+      fetchArbeitnow(keywords).then((jobs) =>
         // Filter Arbeitnow for worldwide/Mexico if possible, though they default mostly to EU/US, we'll keep any that say remote
-        jobs.filter(j => j.location.toLowerCase().includes("remot") || j.location.toLowerCase().includes("mexico") || j.location.toLowerCase().includes("méxico"))
+        jobs.filter(
+          (j) =>
+            j.location.toLowerCase().includes("remot") ||
+            j.location.toLowerCase().includes("mexico") ||
+            j.location.toLowerCase().includes("méxico"),
+        ),
       ),
     ]);
     const sourcesByName = new Map<string, number>();
@@ -262,7 +333,10 @@ export const searchJobsForCv = createServerFn({ method: "POST" })
     }
     console.log("[Search] resultados por fuente:", Object.fromEntries(sourcesByName));
     const seen = new Set<string>();
-    const raw = lists.flat().filter((j) => (seen.has(j.id) ? false : (seen.add(j.id), true))).slice(0, 40);
+    const raw = lists
+      .flat()
+      .filter((j) => (seen.has(j.id) ? false : (seen.add(j.id), true)))
+      .slice(0, 40);
     if (raw.length === 0) return { profile: { ...profile, keywords }, jobs: [] };
 
     // 3. Puntuar contra el CV
@@ -277,14 +351,18 @@ ${raw.map((j) => `[${j.id}] ${j.title} — ${j.company} (${j.location}): ${j.tex
           scores: z.array(z.object({ id: z.string(), match: z.number(), reason: z.string() })),
         }),
       }),
-      providerOptions: reasoningOptions as any,
+      ...(reasoningOptions ? { providerOptions: reasoningOptions } : {}),
     });
     const { scores } = await s.output;
     const byId = new Map(scores.map((x) => [x.id, x]));
     const jobs = raw
       .map((j) => {
         const sc = byId.get(j.id);
-        return { ...j, match: Math.max(0, Math.min(100, Math.round(sc?.match ?? 0))), reason: sc?.reason ?? "" };
+        return {
+          ...j,
+          match: Math.max(0, Math.min(100, Math.round(sc?.match ?? 0))),
+          reason: sc?.reason ?? "",
+        };
       })
       .sort((a, b) => b.match - a.match);
 
@@ -294,7 +372,12 @@ ${raw.map((j) => `[${j.id}] ${j.title} — ${j.company} (${j.location}): ${j.tex
 const TailorInput = z.object({
   cvText: z.string().max(40000).nullable(),
   pdfBase64: z.string().max(14_000_000).nullable(),
-  job: z.object({ title: z.string(), company: z.string(), location: z.string(), text: z.string().max(4000) }),
+  job: z.object({
+    title: z.string(),
+    company: z.string(),
+    location: z.string(),
+    text: z.string().max(4000),
+  }),
 });
 
 export const tailorCv = createServerFn({ method: "POST" })
@@ -307,7 +390,10 @@ export const tailorCv = createServerFn({ method: "POST" })
     if (!runtime) throw new Error("La IA no está configurada.");
     const model = runtime.model;
     const reasoningOptions = runtime.reasoningOptions;
-    const content: any[] = [
+    const content: Array<
+      | { type: "text"; text: string }
+      | { type: "file"; data: string; mediaType: string; filename: string }
+    > = [
       {
         type: "text",
         text: `Reescribe el CV del candidato adaptado a esta vacante. Reglas: NO inventes experiencia, empresas, fechas ni títulos; solo reordena, reformula y destaca lo relevante usando palabras clave de la vacante. Escribe en el idioma de la vacante. Formato Markdown: nombre como # título, datos de contacto, ## Perfil (3 líneas), ## Experiencia (viñetas con logros), ## Habilidades, ## Educación. Máximo una página. Devuelve solo el CV.
@@ -317,11 +403,16 @@ ${data.job.text}`,
     ];
     if (data.cvText?.trim()) content.push({ type: "text", text: `CV actual:\n${data.cvText}` });
     if (data.pdfBase64)
-      content.push({ type: "file", data: data.pdfBase64, mediaType: "application/pdf", filename: "cv.pdf" });
+      content.push({
+        type: "file",
+        data: data.pdfBase64,
+        mediaType: "application/pdf",
+        filename: "cv.pdf",
+      });
     const r = streamText({
       model,
       messages: [{ role: "user", content }],
-      providerOptions: reasoningOptions as any,
+      ...(reasoningOptions ? { providerOptions: reasoningOptions } : {}),
     });
     const cv = (await r.text).trim();
     if (!cv) throw new Error("La IA no devolvió un CV. Inténtalo de nuevo.");
