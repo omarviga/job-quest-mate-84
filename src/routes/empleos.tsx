@@ -153,14 +153,27 @@ function Empleos() {
             <div className="grid size-9 place-items-center rounded-lg bg-accent text-accent-foreground font-mono text-sm font-semibold">
               R
             </div>
-            <div className="text-[15px] font-semibold tracking-tight">RUMBO</div>
+            <div className="leading-tight">
+              <div className="text-[15px] font-semibold tracking-tight">RUMBO</div>
+              <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted">
+                Centro de control
+              </div>
+            </div>
           </Link>
-          <Link
-            to="/"
-            className="font-mono text-[11px] uppercase tracking-[0.15em] text-muted hover:text-ink"
-          >
-            ← Tablero
-          </Link>
+          <div className="flex items-center gap-2 sm:gap-3">
+            <Link
+              to="/analizador"
+              className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-line bg-surface text-ink hover:bg-background transition-colors"
+            >
+              Analizador CV vs Vacante
+            </Link>
+            <Link
+              to="/"
+              className="text-xs font-medium px-3 py-1.5 rounded-lg text-muted hover:text-ink transition-colors"
+            >
+              ← Tablero
+            </Link>
+          </div>
         </header>
 
         <div className="grid gap-5 lg:grid-cols-[380px_1fr]">

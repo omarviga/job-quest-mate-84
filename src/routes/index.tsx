@@ -122,10 +122,16 @@ function Index() {
               className="w-full bg-transparent text-sm text-ink outline-none placeholder:text-muted"
             />
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <Link
+              to="/analizador"
+              className="rounded-lg border border-line bg-surface text-ink px-3 py-2 text-xs sm:text-sm font-semibold hover:bg-background transition-colors"
+            >
+              Analizador CV
+            </Link>
             <Link
               to="/empleos"
-              className="rounded-lg bg-accent text-accent-foreground px-3 py-2 text-sm font-semibold"
+              className="rounded-lg bg-accent text-accent-foreground px-3 py-2 text-xs sm:text-sm font-semibold hover:opacity-90 transition-opacity"
             >
               Vacantes para mi CV
             </Link>
@@ -323,14 +329,17 @@ function Index() {
                     <div className="font-mono text-[10px] text-muted">v4 · actualizado hoy</div>
                   </div>
                 </div>
-                <div className="mt-3 flex gap-2">
+                <div className="mt-3 flex flex-wrap gap-2">
                   <label className="cursor-pointer rounded-lg bg-accent text-accent-foreground text-sm font-medium px-3 py-2 transition-colors hover:bg-ink">
                     Subir nuevo
                     <input type="file" accept=".pdf,.doc,.docx" className="hidden" />
                   </label>
-                  <button className="rounded-lg bg-surface ring-1 ring-black/10 text-sm font-medium px-3 py-2">
-                    Editar
-                  </button>
+                  <Link
+                    to="/analizador"
+                    className="rounded-lg bg-surface ring-1 ring-black/10 text-sm font-medium px-3 py-2 hover:bg-background transition-colors inline-flex items-center gap-1.5"
+                  >
+                    <span>Analizar con Gemini</span>
+                  </Link>
                 </div>
               </div>
             </div>

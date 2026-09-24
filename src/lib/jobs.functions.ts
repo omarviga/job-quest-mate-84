@@ -262,61 +262,110 @@ export const searchJobsForCv = createServerFn({ method: "POST" })
   .validator((d: unknown) => Input.parse(d))
   .handler(async ({ data }): Promise<JobSearchResult> => {
     if (!data.cvText?.trim() && !data.pdfBase64) throw new Error("Añade tu CV primero.");
-    const { streamText, Output } = await import("ai");
-    const { getAiModel } = await import("./ai-gateway.server");
-    const runtime = getAiModel();
-    if (!runtime) throw new Error("La IA no está configurada.");
-    const model = runtime.model;
-    const reasoningOptions = runtime.reasoningOptions;
 
-    // 1. Perfil a partir del CV
-    const content: Array<
-      | { type: "text"; text: string }
-      | { type: "file"; data: string; mediaType: string; filename: string }
-    > = [
-      {
-        type: "text",
+    const { getGemini, Type } = await import("./gemini.server");
+    const ai = getGemini();
+
+    let profile: { title: string; seniority: string; summary: string; keywords: string[] };
+
+    if (ai) {
+      // 1. Perfil a partir del CV con Gemini
+      const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> =
+        [];
+      if (data.cvText?.trim()) parts.push({ text: `CV:\n${data.cvText}` });
+      if (data.pdfBase64) {
+        parts.push({
+          inlineData: {
+            mimeType: "application/pdf",
+            data: data.pdfBase64.replace(/^data:[^;]+;base64,/, ""),
+          },
+        });
+      }
+      parts.push({
         text: "Analiza este CV. Devuelve el puesto objetivo, seniority, un resumen de 1 frase en español y 3 a 5 términos de búsqueda cortos EN INGLÉS (1-2 palabras cada uno, p.ej. 'react', 'data engineer') ordenados por relevancia.",
-      },
-    ];
-    if (data.cvText?.trim()) content.push({ type: "text", text: `CV:\n${data.cvText}` });
-    if (data.pdfBase64)
-      content.push({
-        type: "file",
-        data: data.pdfBase64,
-        mediaType: "application/pdf",
-        filename: "cv.pdf",
       });
 
-    const p = streamText({
-      model,
-      messages: [{ role: "user", content }],
-      output: Output.object({
-        schema: z.object({
-          title: z.string(),
-          seniority: z.string(),
-          summary: z.string(),
-          keywords: z.array(z.string()),
+      const profileResponse = await ai.models.generateContent({
+        model: "gemini-3.8-flash",
+        contents: { parts },
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              title: { type: Type.STRING },
+              seniority: { type: Type.STRING },
+              summary: { type: Type.STRING },
+              keywords: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+              },
+            },
+            required: ["title", "seniority", "summary", "keywords"],
+          },
+        },
+      });
+
+      profile = JSON.parse(profileResponse.text ?? "{}") as {
+        title: string;
+        seniority: string;
+        summary: string;
+        keywords: string[];
+      };
+    } else {
+      const { streamText, Output } = await import("ai");
+      const { getAiModel } = await import("./ai-gateway.server");
+      const runtime = getAiModel();
+      if (!runtime) {
+        throw new Error(
+          "La IA no está configurada. Por favor añade tu clave de API GEMINI_API_KEY en las variables de entorno.",
+        );
+      }
+      const content: Array<
+        | { type: "text"; text: string }
+        | { type: "file"; data: string; mediaType: string; filename: string }
+      > = [
+        {
+          type: "text",
+          text: "Analiza este CV. Devuelve el puesto objetivo, seniority, un resumen de 1 frase en español y 3 a 5 términos de búsqueda cortos EN INGLÉS (1-2 palabras cada uno, p.ej. 'react', 'data engineer') ordenados por relevancia.",
+        },
+      ];
+      if (data.cvText?.trim()) content.push({ type: "text", text: `CV:\n${data.cvText}` });
+      if (data.pdfBase64)
+        content.push({
+          type: "file",
+          data: data.pdfBase64,
+          mediaType: "application/pdf",
+          filename: "cv.pdf",
+        });
+
+      const p = streamText({
+        model: runtime.model,
+        messages: [{ role: "user", content }],
+        output: Output.object({
+          schema: z.object({
+            title: z.string(),
+            seniority: z.string(),
+            summary: z.string(),
+            keywords: z.array(z.string()),
+          }),
         }),
-      }),
-      ...(reasoningOptions ? { providerOptions: reasoningOptions } : {}),
-    });
-    const profile = await p.output;
-    const keywords = profile.keywords.slice(0, 5);
+      });
+      profile = await p.output;
+    }
+
+    const keywords = (profile.keywords ?? []).slice(0, 5);
 
     // 2. Vacantes reales — consultar todas las fuentes en paralelo con enfoque en México
     console.log(
       `[Search] perfil="${profile.title}", keywords=${keywords.join(",")}, location=${data.location || "México"}`,
     );
 
-    // Adzuna is removed from the active search because it doesn't support Mexico.
-    // Instead, we rely on Remotive, Arbeitnow (which are filtered for remote/mexico), and JSearch.
     const lists = await Promise.all([
       fetchJSearch(profile.title, data.location),
       keywords[0] ? fetchJSearch(keywords[0], data.location) : Promise.resolve([]),
       fetchRemotive([profile.title, ...keywords.slice(0, 2)]),
       fetchArbeitnow(keywords).then((jobs) =>
-        // Filter Arbeitnow for worldwide/Mexico if possible, though they default mostly to EU/US, we'll keep any that say remote
         jobs.filter(
           (j) =>
             j.location.toLowerCase().includes("remot") ||
@@ -340,20 +389,69 @@ export const searchJobsForCv = createServerFn({ method: "POST" })
     if (raw.length === 0) return { profile: { ...profile, keywords }, jobs: [] };
 
     // 3. Puntuar contra el CV
-    const s = streamText({
-      model,
-      prompt: `Perfil del candidato: ${profile.title} (${profile.seniority}). ${profile.summary}. Habilidades: ${keywords.join(", ")}.${data.location ? ` Prefiere ubicación: ${data.location}.` : ""}
+    let scores: Array<{ id: string; match: number; reason: string }> = [];
+
+    if (ai) {
+      const scorePrompt = `Perfil del candidato: ${profile.title} (${profile.seniority}). ${profile.summary}. Habilidades: ${keywords.join(", ")}.${data.location ? ` Prefiere ubicación: ${data.location}.` : ""}
+Puntúa de 0 a 100 qué tan bien encaja cada vacante y da una razón breve (máx 15 palabras, en español).
+Vacantes:
+${raw.map((j) => `[${j.id}] ${j.title} — ${j.company} (${j.location}): ${j.text}`).join("\n")}`;
+
+      const scoreResponse = await ai.models.generateContent({
+        model: "gemini-3.8-flash",
+        contents: scorePrompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              scores: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    id: { type: Type.STRING },
+                    match: { type: Type.INTEGER },
+                    reason: { type: Type.STRING },
+                  },
+                  required: ["id", "match", "reason"],
+                },
+              },
+            },
+            required: ["scores"],
+          },
+        },
+      });
+
+      const parsedScores = JSON.parse(scoreResponse.text ?? '{"scores":[]}') as {
+        scores: Array<{ id: string; match: number; reason: string }>;
+      };
+      scores = parsedScores.scores ?? [];
+    } else {
+      const { streamText, Output } = await import("ai");
+      const { getAiModel } = await import("./ai-gateway.server");
+      const runtime = getAiModel();
+      if (!runtime) {
+        throw new Error(
+          "La IA no está configurada. Por favor añade tu clave de API GEMINI_API_KEY en las variables de entorno.",
+        );
+      }
+      const s = streamText({
+        model: runtime.model,
+        prompt: `Perfil del candidato: ${profile.title} (${profile.seniority}). ${profile.summary}. Habilidades: ${keywords.join(", ")}.${data.location ? ` Prefiere ubicación: ${data.location}.` : ""}
 Puntúa de 0 a 100 qué tan bien encaja cada vacante y da una razón breve (máx 15 palabras, en español).
 Vacantes:
 ${raw.map((j) => `[${j.id}] ${j.title} — ${j.company} (${j.location}): ${j.text}`).join("\n")}`,
-      output: Output.object({
-        schema: z.object({
-          scores: z.array(z.object({ id: z.string(), match: z.number(), reason: z.string() })),
+        output: Output.object({
+          schema: z.object({
+            scores: z.array(z.object({ id: z.string(), match: z.number(), reason: z.string() })),
+          }),
         }),
-      }),
-      ...(reasoningOptions ? { providerOptions: reasoningOptions } : {}),
-    });
-    const { scores } = await s.output;
+      });
+      const outputData = await s.output;
+      scores = outputData.scores;
+    }
+
     const byId = new Map(scores.map((x) => [x.id, x]));
     const jobs = raw
       .map((j) => {
@@ -384,12 +482,46 @@ export const tailorCv = createServerFn({ method: "POST" })
   .validator((d: unknown) => TailorInput.parse(d))
   .handler(async ({ data }): Promise<{ cv: string }> => {
     if (!data.cvText?.trim() && !data.pdfBase64) throw new Error("Añade tu CV primero.");
+
+    const { getGemini } = await import("./gemini.server");
+    const ai = getGemini();
+
+    if (ai) {
+      const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> =
+        [];
+      if (data.cvText?.trim()) parts.push({ text: `CV actual:\n${data.cvText}` });
+      if (data.pdfBase64) {
+        parts.push({
+          inlineData: {
+            mimeType: "application/pdf",
+            data: data.pdfBase64.replace(/^data:[^;]+;base64,/, ""),
+          },
+        });
+      }
+      parts.push({
+        text: `Reescribe el CV del candidato adaptado a esta vacante. Reglas: NO inventes experiencia, empresas, fechas ni títulos; solo reordena, reformula y destaca lo relevante usando palabras clave de la vacante. Escribe en el idioma de la vacante. Formato Markdown: nombre como # título, datos de contacto, ## Perfil (3 líneas), ## Experiencia (viñetas con logros), ## Habilidades, ## Educación. Máximo una página. Devuelve solo el CV.
+Vacante: ${data.job.title} — ${data.job.company} (${data.job.location})
+${data.job.text}`,
+      });
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.8-flash",
+        contents: { parts },
+      });
+
+      const cv = response.text?.trim();
+      if (!cv) throw new Error("La IA no devolvió un CV. Inténtalo de nuevo.");
+      return { cv };
+    }
+
     const { streamText } = await import("ai");
     const { getAiModel } = await import("./ai-gateway.server");
     const runtime = getAiModel();
-    if (!runtime) throw new Error("La IA no está configurada.");
-    const model = runtime.model;
-    const reasoningOptions = runtime.reasoningOptions;
+    if (!runtime) {
+      throw new Error(
+        "La IA no está configurada. Por favor añade tu clave de API GEMINI_API_KEY en las variables de entorno.",
+      );
+    }
     const content: Array<
       | { type: "text"; text: string }
       | { type: "file"; data: string; mediaType: string; filename: string }
@@ -410,9 +542,8 @@ ${data.job.text}`,
         filename: "cv.pdf",
       });
     const r = streamText({
-      model,
+      model: runtime.model,
       messages: [{ role: "user", content }],
-      ...(reasoningOptions ? { providerOptions: reasoningOptions } : {}),
     });
     const cv = (await r.text).trim();
     if (!cv) throw new Error("La IA no devolvió un CV. Inténtalo de nuevo.");
