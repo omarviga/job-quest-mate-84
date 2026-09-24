@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 
-import { getGemini, Type } from "./gemini.server";
+import { generateGeminiContent, getGemini, Type } from "./gemini.server";
 
 export interface KeywordSuggestion {
   keyword: string;
@@ -72,7 +72,7 @@ Calcula un porcentaje de coincidencia objetivo y riguroso (0 a 100), identifica 
 Responde estrictamente en formato JSON según el esquema especificado.`,
     });
 
-    const response = await ai.models.generateContent({
+    const response = await generateGeminiContent({
       model: "gemini-3.8-flash",
       contents: { parts },
       config: {

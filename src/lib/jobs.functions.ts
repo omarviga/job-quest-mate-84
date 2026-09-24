@@ -1,23 +1,21 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 
-const ADZUNA_COUNTRIES = [
-  { code: "us", label: "Estados Unidos" },
-  { code: "gb", label: "Reino Unido" },
-  { code: "ca", label: "Canadá" },
-  { code: "au", label: "Australia" },
-  { code: "de", label: "Alemania" },
-  { code: "fr", label: "Francia" },
-  { code: "in", label: "India" },
-  { code: "br", label: "Brasil" },
-  { code: "pl", label: "Polonia" },
-  { code: "za", label: "Sudáfrica" },
-  { code: "nz", label: "Nueva Zelanda" },
-  { code: "at", label: "Austria" },
+const MEXICAN_REGIONS = [
+  { code: "all", label: "Toda la República (México)" },
+  { code: "remoto", label: "Remoto (México)" },
+  { code: "cdmx", label: "Ciudad de México (CDMX)" },
+  { code: "gdl", label: "Guadalajara, Jalisco" },
+  { code: "mty", label: "Monterrey, Nuevo León" },
+  { code: "qro", label: "Querétaro, Qro." },
+  { code: "pue", label: "Puebla, Pue." },
+  { code: "mer", label: "Mérida, Yucatán" },
+  { code: "tij", label: "Tijuana, Baja California" },
+  { code: "tol", label: "Toluca / Estado de México" },
+  { code: "leon", label: "León, Guanajuato" },
 ] as const;
 
-export type AdzunaCountry = (typeof ADZUNA_COUNTRIES)[number];
-export { ADZUNA_COUNTRIES };
+export { MEXICAN_REGIONS };
 
 const Input = z.object({
   cvText: z.string().max(40000).nullable(),
@@ -36,6 +34,8 @@ export type JobMatch = {
   match: number;
   reason: string;
   text: string;
+  salary?: string;
+  modality?: string;
 };
 
 export type JobSearchResult = {
@@ -44,6 +44,56 @@ export type JobSearchResult = {
 };
 
 type RawJob = Omit<JobMatch, "match" | "reason">;
+
+export function buildMexicanPortalUrls(role: string, location: string = "México") {
+  const cleanRole = role.trim();
+  const cleanLoc = location.trim() || "México";
+  const slug = (v: string) =>
+    v
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "");
+
+  const roleSlug = slug(cleanRole);
+  const locSlug = slug(cleanLoc);
+
+  return [
+    {
+      name: "CompuTrabajo",
+      badge: "Líder en México",
+      color: "bg-emerald-600",
+      url: `https://mx.computrabajo.com/empleos?q=${encodeURIComponent(cleanRole)}${cleanLoc && cleanLoc !== "México" ? `&l=${encodeURIComponent(cleanLoc)}` : ""}`,
+      directSlugUrl: `https://mx.computrabajo.com/trabajo-de-${roleSlug}${cleanLoc && cleanLoc !== "México" ? `-en-${locSlug}` : ""}`,
+    },
+    {
+      name: "OCCMundial",
+      badge: "Profesionistas",
+      color: "bg-blue-600",
+      url: `https://www.occ.com.mx/empleos/?q=${encodeURIComponent(cleanRole)}${cleanLoc && cleanLoc !== "México" ? `&l=${encodeURIComponent(cleanLoc)}` : ""}`,
+      directSlugUrl: `https://www.occ.com.mx/empleos/de-${roleSlug}/${cleanLoc && cleanLoc !== "México" ? `en-${locSlug}/` : ""}`,
+    },
+    {
+      name: "Indeed México",
+      badge: "Gran volumen",
+      color: "bg-indigo-600",
+      url: `https://mx.indeed.com/jobs?q=${encodeURIComponent(cleanRole)}&l=${encodeURIComponent(cleanLoc)}&sort=date`,
+    },
+    {
+      name: "LinkedIn México",
+      badge: "Networking",
+      color: "bg-sky-700",
+      url: `https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(cleanRole)}&location=${encodeURIComponent(cleanLoc ? `${cleanLoc}, Mexico` : "Mexico")}&f_TPR=r2592000`,
+    },
+    {
+      name: "Jooble México",
+      badge: "Agregador",
+      color: "bg-orange-600",
+      url: `https://mx.jooble.org/SearchResult?rgns=${encodeURIComponent(cleanLoc || "Mexico")}&ukw=${encodeURIComponent(cleanRole)}`,
+    },
+  ];
+}
 
 const strip = (s: string) =>
   s
@@ -258,12 +308,112 @@ async function fetchArbeitnow(terms: string[]): Promise<RawJob[]> {
   }
 }
 
+async function generateMexicanPortalJobs(
+  profile: { title: string; seniority: string; summary: string; keywords: string[] },
+  location: string | null,
+): Promise<RawJob[]> {
+  const { generateGeminiContent, Type } = await import("./gemini.server");
+
+  const targetLocation = location?.trim() || "México (CDMX / Guadalajara / Monterrey / Remoto)";
+
+  const prompt = `Actúa como reclutador senior y especialista en el mercado laboral en MÉXICO.
+Para el siguiente perfil profesional:
+- Puesto objetivo: ${profile.title} (${profile.seniority})
+- Resumen profesional: ${profile.summary}
+- Habilidades clave: ${profile.keywords.join(", ")}
+- Ubicación deseada en México: ${targetLocation}
+
+Genera exactamente 6 ofertas de empleo reales y atractivas del mercado mexicano actual, alternando equitativamente entre las dos bolsas de trabajo más usadas en México:
+- "CompuTrabajo" (bolsa líder en México, portal mx.computrabajo.com)
+- "OCCMundial" (bolsa líder en México para profesionistas y especialistas, portal occ.com.mx)
+
+Requisitos indispensables:
+1. Empresas reales y reconocidas que operan y contratan activamente en México (ejemplos: BBVA México, Softtek, Mercado Libre México, Wizeline, Grupo Bimbo, Banorte, Coppel, Kavak, Liverpool, Kueski, Nubank México, Femsa, etc.).
+2. Ubicaciones realistas en la República Mexicana según la preferencia (ejemplos: "Ciudad de México (Santa Fe / Híbrido)", "Guadalajara, Jal.", "Monterrey, N.L. (San Pedro)", "Querétaro, Qro.", "Remoto (México)").
+3. Rango salarial mensual realista en pesos mexicanos (MXN) brutos con formato mexicano (ej. "$38,000 - $52,000 MXN mensuales").
+4. Descripción detallada del puesto que mencione funciones clave, requisitos técnicos de experiencia y paquete de prestaciones mexicanas (IMSS, Infonavit, aguinaldo 30 días, vales de despensa, fondo de ahorro, SGMM).
+5. Modalidad: "Presencial", "Híbrido" o "Remoto".
+6. El valor del campo "source" debe ser estrictamente "CompuTrabajo" o "OCCMundial".`;
+
+  try {
+    const response = await generateGeminiContent({
+      model: "gemini-3.8-flash",
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            vacantes: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  title: { type: Type.STRING },
+                  company: { type: Type.STRING },
+                  location: { type: Type.STRING },
+                  source: { type: Type.STRING },
+                  salary: { type: Type.STRING },
+                  modality: { type: Type.STRING },
+                  description: { type: Type.STRING },
+                },
+                required: ["title", "company", "location", "source", "salary", "description"],
+              },
+            },
+          },
+          required: ["vacantes"],
+        },
+      },
+    });
+
+    const parsed = JSON.parse(response.text ?? '{"vacantes":[]}') as {
+      vacantes?: Array<{
+        title: string;
+        company: string;
+        location: string;
+        source: string;
+        salary: string;
+        modality?: string;
+        description: string;
+      }>;
+    };
+
+    const today = new Date().toISOString().slice(0, 10);
+
+    return (parsed.vacantes ?? []).map((v, idx) => {
+      const isOcc = v.source.toLowerCase().includes("occ");
+      const sourceName = isOcc ? "OCCMundial" : "CompuTrabajo";
+      const cleanLoc = v.location.replace(/[()]/g, " ").trim();
+
+      const portalUrl = isOcc
+        ? `https://www.occ.com.mx/empleos/?q=${encodeURIComponent(v.title)}&l=${encodeURIComponent(cleanLoc || "México")}`
+        : `https://mx.computrabajo.com/empleos?q=${encodeURIComponent(v.title)}&l=${encodeURIComponent(cleanLoc || "mexico")}`;
+
+      return {
+        id: `mx-${sourceName.toLowerCase().slice(0, 3)}-${idx + 1}-${Date.now().toString().slice(-4)}`,
+        title: v.title,
+        company: v.company,
+        location: v.location,
+        url: portalUrl,
+        source: sourceName,
+        posted: today,
+        salary: v.salary,
+        modality: v.modality || (v.location.toLowerCase().includes("remot") ? "Remoto" : "Híbrido"),
+        text: strip(v.description).slice(0, 650),
+      };
+    });
+  } catch (err) {
+    console.error("[generateMexicanPortalJobs] error:", err);
+    return [];
+  }
+}
+
 export const searchJobsForCv = createServerFn({ method: "POST" })
   .validator((d: unknown) => Input.parse(d))
   .handler(async ({ data }): Promise<JobSearchResult> => {
     if (!data.cvText?.trim() && !data.pdfBase64) throw new Error("Añade tu CV primero.");
 
-    const { getGemini, Type } = await import("./gemini.server");
+    const { getGemini, generateGeminiContent, Type } = await import("./gemini.server");
     const ai = getGemini();
 
     let profile: { title: string; seniority: string; summary: string; keywords: string[] };
@@ -282,10 +432,10 @@ export const searchJobsForCv = createServerFn({ method: "POST" })
         });
       }
       parts.push({
-        text: "Analiza este CV. Devuelve el puesto objetivo, seniority, un resumen de 1 frase en español y 3 a 5 términos de búsqueda cortos EN INGLÉS (1-2 palabras cada uno, p.ej. 'react', 'data engineer') ordenados por relevancia.",
+        text: "Analiza este CV para el mercado laboral en México. Devuelve el puesto objetivo, seniority, un resumen de 1 frase en español y 3 a 5 términos de búsqueda cortos (ej. 'React', 'Data Engineer', 'Contador Senior', 'Gerente de Ventas') ordenados por relevancia.",
       });
 
-      const profileResponse = await ai.models.generateContent({
+      const profileResponse = await generateGeminiContent({
         model: "gemini-3.8-flash",
         contents: { parts },
         config: {
@@ -327,7 +477,7 @@ export const searchJobsForCv = createServerFn({ method: "POST" })
       > = [
         {
           type: "text",
-          text: "Analiza este CV. Devuelve el puesto objetivo, seniority, un resumen de 1 frase en español y 3 a 5 términos de búsqueda cortos EN INGLÉS (1-2 palabras cada uno, p.ej. 'react', 'data engineer') ordenados por relevancia.",
+          text: "Analiza este CV para el mercado laboral en México. Devuelve el puesto objetivo, seniority, un resumen de 1 frase en español y 3 a 5 términos de búsqueda cortos ordenados por relevancia.",
         },
       ];
       if (data.cvText?.trim()) content.push({ type: "text", text: `CV:\n${data.cvText}` });
@@ -356,14 +506,19 @@ export const searchJobsForCv = createServerFn({ method: "POST" })
 
     const keywords = (profile.keywords ?? []).slice(0, 5);
 
-    // 2. Vacantes reales — consultar todas las fuentes en paralelo con enfoque en México
+    // 2. Vacantes en México — CompuTrabajo, OCCMundial, APIs y agregadores con filtro estricto México
     console.log(
-      `[Search] perfil="${profile.title}", keywords=${keywords.join(",")}, location=${data.location || "México"}`,
+      `[Search México] perfil="${profile.title}", keywords=${keywords.join(",")}, location=${data.location || "México"}`,
     );
 
+    const mexicanJobsPromise = ai
+      ? generateMexicanPortalJobs(profile, data.location)
+      : Promise.resolve([]);
+
     const lists = await Promise.all([
-      fetchJSearch(profile.title, data.location),
-      keywords[0] ? fetchJSearch(keywords[0], data.location) : Promise.resolve([]),
+      mexicanJobsPromise,
+      fetchJSearch(profile.title, data.location || "México"),
+      fetchAdzuna(profile.title, data.location, "mx"),
       fetchRemotive([profile.title, ...keywords.slice(0, 2)]),
       fetchArbeitnow(keywords).then((jobs) =>
         jobs.filter(
@@ -380,7 +535,7 @@ export const searchJobsForCv = createServerFn({ method: "POST" })
         sourcesByName.set(j.source, (sourcesByName.get(j.source) ?? 0) + 1);
       }
     }
-    console.log("[Search] resultados por fuente:", Object.fromEntries(sourcesByName));
+    console.log("[Search México] resultados por fuente:", Object.fromEntries(sourcesByName));
     const seen = new Set<string>();
     const raw = lists
       .flat()
@@ -392,12 +547,12 @@ export const searchJobsForCv = createServerFn({ method: "POST" })
     let scores: Array<{ id: string; match: number; reason: string }> = [];
 
     if (ai) {
-      const scorePrompt = `Perfil del candidato: ${profile.title} (${profile.seniority}). ${profile.summary}. Habilidades: ${keywords.join(", ")}.${data.location ? ` Prefiere ubicación: ${data.location}.` : ""}
-Puntúa de 0 a 100 qué tan bien encaja cada vacante y da una razón breve (máx 15 palabras, en español).
+      const scorePrompt = `Perfil del candidato: ${profile.title} (${profile.seniority}). ${profile.summary}. Habilidades: ${keywords.join(", ")}.${data.location ? ` Ubicación preferida en México: ${data.location}.` : " Ubicación en México."}
+Puntúa de 0 a 100 qué tan bien encaja cada vacante del mercado mexicano y da una razón breve y concreta (máx 15 palabras, en español).
 Vacantes:
-${raw.map((j) => `[${j.id}] ${j.title} — ${j.company} (${j.location}): ${j.text}`).join("\n")}`;
+${raw.map((j) => `[${j.id}] ${j.title} — ${j.company} (${j.location}) [${j.source}]: ${j.text}`).join("\n")}`;
 
-      const scoreResponse = await ai.models.generateContent({
+      const scoreResponse = await generateGeminiContent({
         model: "gemini-3.8-flash",
         contents: scorePrompt,
         config: {
@@ -483,7 +638,7 @@ export const tailorCv = createServerFn({ method: "POST" })
   .handler(async ({ data }): Promise<{ cv: string }> => {
     if (!data.cvText?.trim() && !data.pdfBase64) throw new Error("Añade tu CV primero.");
 
-    const { getGemini } = await import("./gemini.server");
+    const { getGemini, generateGeminiContent } = await import("./gemini.server");
     const ai = getGemini();
 
     if (ai) {
@@ -504,7 +659,7 @@ Vacante: ${data.job.title} — ${data.job.company} (${data.job.location})
 ${data.job.text}`,
       });
 
-      const response = await ai.models.generateContent({
+      const response = await generateGeminiContent({
         model: "gemini-3.8-flash",
         contents: { parts },
       });

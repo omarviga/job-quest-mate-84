@@ -4,15 +4,22 @@ import {
   AlertCircle,
   ArrowRight,
   BarChart3,
+  Bookmark,
+  Check,
   CheckCircle2,
   Clock,
   Copy,
   Download,
+  Edit3,
   FileText,
+  FolderKanban,
   History,
+  Layers,
   Lightbulb,
   Percent,
+  Plus,
   RefreshCw,
+  RotateCcw,
   Search,
   Sparkles,
   Trash2,
@@ -37,9 +44,20 @@ import {
   type KeywordSuggestion,
   type MatchAnalysisResult,
 } from "@/lib/analyzer.functions";
+import {
+  type CvVersion,
+  deleteCvVersion,
+  getSavedCvVersions,
+  resetDefaultCvVersions,
+  saveCvVersion,
+} from "@/lib/cv-versions";
 import { exportAnalysisToPdf } from "@/lib/export-pdf";
 
 export const Route = createFileRoute("/analizador")({
+  validateSearch: (search: Record<string, unknown>) => ({
+    jobTitle: typeof search.jobTitle === "string" ? search.jobTitle : undefined,
+    jobDescription: typeof search.jobDescription === "string" ? search.jobDescription : undefined,
+  }),
   head: () => ({
     meta: [
       { title: "Analizador de Coincidencia CV vs. Vacante — RUMBO" },
@@ -182,10 +200,176 @@ function AnalizadorPage() {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [copiedAll, setCopiedAll] = useState(false);
 
-  // Load history on mount
+  // CV Versions State
+  const [cvVersions, setCvVersions] = useState<CvVersion[]>([]);
+  const [selectedVersionId, setSelectedVersionId] = useState<string>("");
+  const [showSaveVersionModal, setShowSaveVersionModal] = useState(false);
+  const [saveVersionTitle, setSaveVersionTitle] = useState("");
+  const [saveVersionRole, setSaveVersionRole] = useState("");
+  const [saveVersionMode, setSaveVersionMode] = useState<"new" | "update">("new");
+  const [showManageVersionsModal, setShowManageVersionsModal] = useState(false);
+  const [editingVersionId, setEditingVersionId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editRole, setEditRole] = useState("");
+  const [versionNotice, setVersionNotice] = useState("");
+
+  // Search params from Route
+  const searchParams = Route.useSearch();
+
+  // Load history, CV versions, and incoming job description on mount
   useEffect(() => {
     setHistory(getSavedReports());
+    const loadedVersions = getSavedCvVersions();
+    setCvVersions(loadedVersions);
+    if (loadedVersions.length > 0) {
+      const defaultVer = loadedVersions.find((v) => v.isDefault) || loadedVersions[0];
+      setSelectedVersionId(defaultVer.id);
+      setCvText(defaultVer.content);
+    }
   }, []);
+
+  useEffect(() => {
+    if (searchParams?.jobDescription) {
+      setJobDescription(searchParams.jobDescription);
+    }
+    if (searchParams?.jobTitle) {
+      setCurrentJobTitle(searchParams.jobTitle);
+    }
+  }, [searchParams?.jobDescription, searchParams?.jobTitle]);
+
+  const activeVersion = useMemo(() => {
+    return cvVersions.find((v) => v.id === selectedVersionId) || null;
+  }, [cvVersions, selectedVersionId]);
+
+  const hasCvModified = useMemo(() => {
+    if (!activeVersion || cvMode !== "text") return false;
+    return cvText.trim() !== activeVersion.content.trim();
+  }, [activeVersion, cvText, cvMode]);
+
+  function handleSelectCvVersion(versionId: string) {
+    const target = cvVersions.find((v) => v.id === versionId);
+    if (target) {
+      setSelectedVersionId(target.id);
+      setCvMode("text");
+      setCvText(target.content);
+      setPdfFile(null);
+      setVersionNotice(`Cargada versión: "${target.title}"`);
+      setTimeout(() => setVersionNotice(""), 3500);
+    }
+  }
+
+  function handleOpenSaveVersionModal(mode: "new" | "update") {
+    setSaveVersionMode(mode);
+    if (mode === "update" && activeVersion) {
+      setSaveVersionTitle(activeVersion.title);
+      setSaveVersionRole(activeVersion.targetRole);
+    } else {
+      setSaveVersionTitle(
+        activeVersion ? `${activeVersion.title} (Adaptada)` : "Nueva versión de CV",
+      );
+      setSaveVersionRole(activeVersion?.targetRole || "Especialidad General");
+    }
+    setShowSaveVersionModal(true);
+  }
+
+  function handleSaveVersionSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!saveVersionTitle.trim() || !cvText.trim()) return;
+
+    const updated = saveCvVersion({
+      id: saveVersionMode === "update" && selectedVersionId ? selectedVersionId : undefined,
+      title: saveVersionTitle.trim(),
+      targetRole: saveVersionRole.trim() || "Especialidad General",
+      content: cvText,
+    });
+
+    setCvVersions(updated);
+    if (saveVersionMode === "new") {
+      const created = updated[0];
+      setSelectedVersionId(created.id);
+      setVersionNotice(`Nueva versión "${created.title}" guardada.`);
+    } else {
+      setVersionNotice(`Versión "${saveVersionTitle}" actualizada con el contenido actual.`);
+    }
+    setShowSaveVersionModal(false);
+    setTimeout(() => setVersionNotice(""), 3500);
+  }
+
+  function handleQuickUpdateActiveVersion() {
+    if (!activeVersion) return;
+    const updated = saveCvVersion({
+      id: activeVersion.id,
+      title: activeVersion.title,
+      targetRole: activeVersion.targetRole,
+      content: cvText,
+    });
+    setCvVersions(updated);
+    setVersionNotice(`Cambios guardados en "${activeVersion.title}".`);
+    setTimeout(() => setVersionNotice(""), 3500);
+  }
+
+  function handleRevertToOriginal() {
+    if (activeVersion) {
+      setCvText(activeVersion.content);
+      setVersionNotice(`Texto revertido a la versión original.`);
+      setTimeout(() => setVersionNotice(""), 3000);
+    }
+  }
+
+  function handleDeleteVersion(id: string) {
+    if (cvVersions.length <= 1) {
+      alert("Debes conservar al menos una versión de currículum en tu biblioteca.");
+      return;
+    }
+    const updated = deleteCvVersion(id);
+    setCvVersions(updated);
+    if (selectedVersionId === id) {
+      const nextVer = updated[0];
+      setSelectedVersionId(nextVer.id);
+      setCvText(nextVer.content);
+    }
+    setVersionNotice("Versión eliminada de la biblioteca.");
+    setTimeout(() => setVersionNotice(""), 3000);
+  }
+
+  function handleStartEditingDetails(v: CvVersion) {
+    setEditingVersionId(v.id);
+    setEditTitle(v.title);
+    setEditRole(v.targetRole);
+  }
+
+  function handleSaveEditingDetails(id: string) {
+    if (!editTitle.trim()) return;
+    const ver = cvVersions.find((item) => item.id === id);
+    if (!ver) return;
+
+    const updated = saveCvVersion({
+      id,
+      title: editTitle.trim(),
+      targetRole: editRole.trim() || "Especialidad General",
+      content: ver.content,
+    });
+    setCvVersions(updated);
+    setEditingVersionId(null);
+    setVersionNotice("Detalles de la versión actualizados.");
+    setTimeout(() => setVersionNotice(""), 3000);
+  }
+
+  function handleResetDefaultVersions() {
+    if (
+      window.confirm(
+        "¿Restaurar las 3 versiones de CV recomendadas (Streaming, Modelado BI, MLOps)? Tus versiones personalizadas se reiniciarán.",
+      )
+    ) {
+      const res = resetDefaultCvVersions();
+      setCvVersions(res);
+      setSelectedVersionId(res[0].id);
+      setCvText(res[0].content);
+      setShowManageVersionsModal(false);
+      setVersionNotice("Versiones de CV restauradas con éxito.");
+      setTimeout(() => setVersionNotice(""), 3500);
+    }
+  }
 
   // Summary Metrics calculated from History
   const historyMetrics = useMemo(() => {
@@ -267,15 +451,19 @@ function AnalizadorPage() {
       setResult(res);
 
       // Auto-save to localStorage
+      const cvUsedTitle =
+        cvMode === "pdf" && pdfFile
+          ? pdfFile.name
+          : activeVersion
+            ? activeVersion.title
+            : cvText.split("\n")[0]?.slice(0, 40) || "CV en Texto";
+
       const newSaved = saveAnalysisReport({
         jobTitle: detectedTitle,
         jobSnippet: jobDescription.slice(0, 160).replace(/\s+/g, " ") + "...",
         jobDescriptionFull: jobDescription,
         cvMode,
-        cvTitle:
-          cvMode === "pdf" && pdfFile
-            ? pdfFile.name
-            : cvText.split("\n")[0]?.slice(0, 40) || "CV en Texto",
+        cvTitle: cvUsedTitle,
         cvText: cvMode === "text" ? cvText : undefined,
         result: res,
       });
@@ -343,6 +531,12 @@ function AnalizadorPage() {
     if (report.cvText) {
       setCvMode("text");
       setCvText(report.cvText);
+      const matchVer = cvVersions.find(
+        (v) => v.title === report.cvTitle || v.content.trim() === report.cvText?.trim(),
+      );
+      if (matchVer) {
+        setSelectedVersionId(matchVer.id);
+      }
     }
     setResult(report.result);
     setCurrentJobTitle(report.jobTitle);
@@ -600,7 +794,10 @@ function AnalizadorPage() {
               </div>
 
               {/* Column 2: Candidate CV */}
-              <div className="rounded-2xl bg-surface ring-1 ring-black/5 p-6 space-y-4">
+              <div
+                id="seccion-cv"
+                className="rounded-2xl bg-surface ring-1 ring-black/5 p-6 space-y-4 scroll-mt-6"
+              >
                 <div className="flex items-center justify-between">
                   <div>
                     <span className={labelClass}>Paso 2</span>
@@ -635,22 +832,159 @@ function AnalizadorPage() {
                 </div>
 
                 {cvMode === "text" ? (
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <p className="text-xs text-muted">
-                        Pega el contenido en texto de tu CV (experiencia, habilidades, estudios).
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() => setCvText(SAMPLE_CV)}
-                        className="text-xs font-mono font-medium text-accent hover:underline flex items-center gap-1 shrink-0"
-                      >
-                        <Sparkles className="size-3.5" />
-                        Cargar CV de Lucía
-                      </button>
+                  <div className="space-y-3">
+                    {/* CV Version Control Center */}
+                    <div className="rounded-xl border border-line bg-background/80 p-3.5 space-y-3">
+                      <div className="flex items-center justify-between flex-wrap gap-2">
+                        <div className="flex items-center gap-2">
+                          <Layers className="size-4 text-accent" />
+                          <span className="text-xs font-bold text-ink">
+                            Versiones de CV Guardadas
+                          </span>
+                          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-surface border border-line text-muted">
+                            {cvVersions.length}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenSaveVersionModal("new")}
+                            className="px-2.5 py-1 text-[11px] font-semibold text-accent hover:bg-accent/10 rounded-md transition-colors flex items-center gap-1"
+                            title="Guardar el texto actual como una nueva versión en tu biblioteca"
+                          >
+                            <Plus className="size-3.5" />
+                            <span>Guardar como versión</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setShowManageVersionsModal(true)}
+                            className="px-2.5 py-1 text-[11px] font-semibold text-muted hover:text-ink hover:bg-surface border border-line rounded-md transition-colors flex items-center gap-1"
+                            title="Gestionar, renombrar o eliminar versiones de CV"
+                          >
+                            <FolderKanban className="size-3.5" />
+                            <span>Gestionar</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Quick Version Switcher Carousel / Cards */}
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        {cvVersions.map((v) => {
+                          const isSelected = selectedVersionId === v.id;
+                          return (
+                            <button
+                              key={v.id}
+                              type="button"
+                              onClick={() => handleSelectCvVersion(v.id)}
+                              className={`text-left p-2.5 rounded-xl border transition-all relative flex flex-col justify-between ${
+                                isSelected
+                                  ? "bg-accent/10 border-accent/70 shadow-xs ring-1 ring-accent/30"
+                                  : "bg-surface border-line hover:border-muted hover:bg-surface/80"
+                              }`}
+                            >
+                              <div>
+                                <div className="flex items-center justify-between gap-1 mb-1">
+                                  <span className="text-[9px] font-mono uppercase tracking-wider text-muted truncate">
+                                    {v.targetRole}
+                                  </span>
+                                  {isSelected && (
+                                    <Check className="size-3.5 text-accent shrink-0" />
+                                  )}
+                                </div>
+                                <div className="text-xs font-semibold text-ink line-clamp-1">
+                                  {v.title}
+                                </div>
+                              </div>
+                              <div className="flex items-center justify-between text-[10px] text-muted/80 font-mono mt-2">
+                                <span>{v.content.length.toLocaleString()} c.</span>
+                                <span>{v.isDefault ? "Recomendado" : "Custom"}</span>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {/* Notification toast pill */}
+                      {versionNotice && (
+                        <div className="text-xs text-accent font-medium px-2.5 py-1.5 rounded-lg bg-accent/10 border border-accent/20 flex items-center gap-1.5">
+                          <CheckCircle2 className="size-3.5 shrink-0" />
+                          <span>{versionNotice}</span>
+                        </div>
+                      )}
+
+                      {/* Notice if text was modified compared to saved version */}
+                      {hasCvModified && activeVersion && (
+                        <div className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-900 dark:text-amber-200 flex-wrap">
+                          <div className="flex items-center gap-1.5">
+                            <Edit3 className="size-3.5 shrink-0 text-amber-600" />
+                            <span>
+                              Has modificado el texto de <strong>"{activeVersion.title}"</strong>.
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1.5 ml-auto">
+                            <button
+                              type="button"
+                              onClick={handleQuickUpdateActiveVersion}
+                              className="px-2 py-0.5 text-[11px] font-semibold bg-amber-500/20 hover:bg-amber-500/30 rounded text-amber-950 dark:text-amber-100"
+                            >
+                              Guardar cambios
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenSaveVersionModal("new")}
+                              className="px-2 py-0.5 text-[11px] font-semibold bg-background hover:bg-surface border border-line rounded text-ink"
+                            >
+                              Guardar como nueva
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleRevertToOriginal}
+                              className="px-2 py-0.5 text-[11px] hover:underline text-muted"
+                            >
+                              Revertir
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
 
+                    {/* Textarea */}
                     <div className="relative">
+                      <div className="flex items-center justify-between pb-1 text-xs text-muted">
+                        <span>
+                          {activeVersion ? (
+                            <>
+                              Editando versión:{" "}
+                              <strong className="text-ink">{activeVersion.title}</strong>
+                            </>
+                          ) : (
+                            "Contenido del currículum"
+                          )}
+                        </span>
+                        <div className="flex items-center gap-3">
+                          {activeVersion && (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenSaveVersionModal("update")}
+                              className="text-accent hover:underline font-mono text-[11px] flex items-center gap-1"
+                            >
+                              <Bookmark className="size-3" />
+                              Guardar versión
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => handleSelectCvVersion(cvVersions[0]?.id || "")}
+                            className="text-accent hover:underline font-mono text-[11px] flex items-center gap-1"
+                          >
+                            <Sparkles className="size-3" />
+                            Cargar versión recomendada
+                          </button>
+                        </div>
+                      </div>
+
                       <textarea
                         value={cvText}
                         onChange={(e) => setCvText(e.target.value)}
@@ -666,7 +1000,7 @@ function AnalizadorPage() {
                             onClick={() => setCvText("")}
                             className="hover:text-destructive transition-colors"
                           >
-                            Limpiar
+                            Limpiar editor
                           </button>
                         )}
                       </div>
@@ -804,6 +1138,16 @@ function AnalizadorPage() {
                 dateLabel="Recién generado"
                 result={result}
                 savedNotice={savedSuccessMsg}
+                cvVersionUsed={
+                  cvMode === "text" && activeVersion
+                    ? activeVersion.title
+                    : cvMode === "pdf" && pdfFile
+                      ? pdfFile.name
+                      : "CV en Texto"
+                }
+                onSwitchCvAndReanalyze={() => {
+                  document.getElementById("seccion-cv")?.scrollIntoView({ behavior: "smooth" });
+                }}
                 copiedKey={copiedKey}
                 copiedAll={copiedAll}
                 onCopyKey={copyKeyword}
@@ -1154,6 +1498,7 @@ function AnalizadorPage() {
               title={selectedReport.jobTitle}
               dateLabel={`Guardado ${formatReportDate(selectedReport.timestamp)}`}
               result={selectedReport.result}
+              cvVersionUsed={selectedReport.cvTitle}
               copiedKey={copiedKey}
               copiedAll={copiedAll}
               onCopyKey={copyKeyword}
@@ -1174,6 +1519,302 @@ function AnalizadorPage() {
             />
           </div>
         )}
+
+        {/* Modal: Guardar Versión de CV */}
+        {showSaveVersionModal && (
+          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="bg-surface border border-line rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 animate-in fade-in zoom-in-95">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="size-8 rounded-lg bg-accent/10 text-accent grid place-items-center">
+                    <Bookmark className="size-4" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-ink text-base">
+                      {saveVersionMode === "new"
+                        ? "Guardar Nueva Versión de CV"
+                        : "Actualizar Versión de CV"}
+                    </h3>
+                    <p className="text-[11px] text-muted">
+                      Organiza variantes adaptadas para distintos perfiles o tecnologías
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowSaveVersionModal(false)}
+                  className="text-muted hover:text-ink p-1 rounded-lg hover:bg-background transition-colors"
+                >
+                  <X className="size-4" />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveVersionSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold text-ink mb-1.5">
+                    Título o Nombre de la Versión
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={saveVersionTitle}
+                    onChange={(e) => setSaveVersionTitle(e.target.value)}
+                    placeholder="ej: Data Engineer — AWS & Big Data"
+                    className="w-full rounded-xl bg-background border border-line px-3.5 py-2.5 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-accent"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-ink mb-1.5">
+                    Rol Objetivo o Especialidad
+                  </label>
+                  <input
+                    type="text"
+                    value={saveVersionRole}
+                    onChange={(e) => setSaveVersionRole(e.target.value)}
+                    placeholder="ej: Senior Data Engineer / Analytics Engineer"
+                    className="w-full rounded-xl bg-background border border-line px-3.5 py-2.5 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-accent"
+                  />
+                </div>
+
+                <div className="rounded-xl bg-background/80 border border-line p-3 text-xs text-muted space-y-1">
+                  <div className="flex justify-between">
+                    <span>Caracteres en el editor:</span>
+                    <strong className="font-mono text-ink">{cvText.length.toLocaleString()}</strong>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Palabras aprox:</span>
+                    <strong className="font-mono text-ink">
+                      {cvText.trim() ? cvText.trim().split(/\s+/).length : 0}
+                    </strong>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowSaveVersionModal(false)}
+                    className="px-4 py-2 text-xs font-semibold rounded-xl border border-line hover:bg-background text-muted hover:text-ink transition-colors"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={!saveVersionTitle.trim() || !cvText.trim()}
+                    className="px-5 py-2 text-xs font-semibold rounded-xl bg-accent text-accent-foreground hover:opacity-95 transition-opacity disabled:opacity-50"
+                  >
+                    Guardar en Biblioteca
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* Modal: Gestionar Biblioteca de CVs */}
+        {showManageVersionsModal && (
+          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="bg-surface border border-line rounded-2xl max-w-2xl w-full p-6 shadow-2xl space-y-5 max-h-[90vh] flex flex-col animate-in fade-in zoom-in-95">
+              <div className="flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-2.5">
+                  <div className="size-9 rounded-xl bg-accent/10 text-accent grid place-items-center">
+                    <FolderKanban className="size-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-ink text-lg">Biblioteca de Versiones de CV</h3>
+                    <p className="text-xs text-muted">
+                      Alterna entre perfiles enfocados (Streaming, BI, Cloud, MLOps) para comparar
+                      qué CV encaja mejor con cada vacante.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowManageVersionsModal(false);
+                    setEditingVersionId(null);
+                  }}
+                  className="text-muted hover:text-ink p-1.5 rounded-lg hover:bg-background transition-colors"
+                >
+                  <X className="size-5" />
+                </button>
+              </div>
+
+              {/* Version list */}
+              <div className="space-y-3 overflow-y-auto pr-1 flex-1">
+                {cvVersions.map((v) => {
+                  const isSelected = selectedVersionId === v.id;
+                  const isEditing = editingVersionId === v.id;
+
+                  return (
+                    <div
+                      key={v.id}
+                      className={`p-4 rounded-xl border transition-all ${
+                        isSelected
+                          ? "bg-accent/5 border-accent/60 shadow-xs"
+                          : "bg-background border-line"
+                      }`}
+                    >
+                      {isEditing ? (
+                        <div className="space-y-3">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <div>
+                              <label className="text-[10px] font-mono uppercase text-muted">
+                                Título de la versión
+                              </label>
+                              <input
+                                type="text"
+                                value={editTitle}
+                                onChange={(e) => setEditTitle(e.target.value)}
+                                className="w-full text-xs font-semibold p-2 rounded-lg bg-surface border border-line text-ink focus:outline-none focus:ring-1 focus:ring-accent"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[10px] font-mono uppercase text-muted">
+                                Especialidad / Rol
+                              </label>
+                              <input
+                                type="text"
+                                value={editRole}
+                                onChange={(e) => setEditRole(e.target.value)}
+                                className="w-full text-xs font-semibold p-2 rounded-lg bg-surface border border-line text-ink focus:outline-none focus:ring-1 focus:ring-accent"
+                              />
+                            </div>
+                          </div>
+                          <div className="flex justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setEditingVersionId(null)}
+                              className="px-3 py-1 text-xs text-muted hover:text-ink"
+                            >
+                              Cancelar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleSaveEditingDetails(v.id)}
+                              className="px-3 py-1 text-xs font-semibold rounded-md bg-accent text-accent-foreground"
+                            >
+                              Guardar Cambios
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <div className="space-y-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-xs font-bold text-ink truncate">{v.title}</span>
+                              <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-surface border border-line text-muted">
+                                {v.targetRole}
+                              </span>
+                              {isSelected && (
+                                <span className="text-[10px] font-mono font-bold text-accent bg-accent/15 px-2 py-0.5 rounded-md">
+                                  ACTIVA EN ANALIZADOR
+                                </span>
+                              )}
+                              {v.isDefault && (
+                                <span className="text-[10px] font-mono text-muted bg-surface px-1.5 py-0.5 rounded">
+                                  Recomendada
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[11px] text-muted line-clamp-2">
+                              {v.content.slice(0, 160)}...
+                            </p>
+                            <div className="text-[10px] font-mono text-muted/70">
+                              {v.content.length.toLocaleString()} caracteres · Actualizado:{" "}
+                              {new Date(v.lastModified).toLocaleDateString("es-ES", {
+                                day: "numeric",
+                                month: "short",
+                                year: "numeric",
+                              })}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                            {!isSelected ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  handleSelectCvVersion(v.id);
+                                  setShowManageVersionsModal(false);
+                                }}
+                                className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-surface border border-line text-ink hover:bg-background transition-colors"
+                              >
+                                Cargar en Analizador
+                              </button>
+                            ) : (
+                              <span className="text-xs font-semibold text-accent px-2 flex items-center gap-1">
+                                <Check className="size-3.5" />
+                                Activa
+                              </span>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={() => handleStartEditingDetails(v)}
+                              className="p-1.5 rounded-lg border border-line bg-surface text-muted hover:text-ink transition-colors"
+                              title="Renombrar o cambiar rol"
+                            >
+                              <Edit3 className="size-3.5" />
+                            </button>
+
+                            {cvVersions.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (window.confirm(`¿Eliminar la versión "${v.title}"?`)) {
+                                    handleDeleteVersion(v.id);
+                                  }
+                                }}
+                                className="p-1.5 rounded-lg text-muted hover:text-destructive hover:bg-rose-500/10 transition-colors"
+                                title="Eliminar esta versión"
+                              >
+                                <Trash2 className="size-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Footer Actions */}
+              <div className="pt-3 border-t border-line flex flex-wrap items-center justify-between gap-3 shrink-0 text-xs">
+                <button
+                  type="button"
+                  onClick={handleResetDefaultVersions}
+                  className="text-muted hover:text-ink font-mono text-[11px] flex items-center gap-1"
+                >
+                  <RotateCcw className="size-3" />
+                  <span>Restaurar versiones de ejemplo</span>
+                </button>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowManageVersionsModal(false);
+                      handleOpenSaveVersionModal("new");
+                    }}
+                    className="px-3.5 py-1.5 font-semibold rounded-lg bg-accent text-accent-foreground hover:opacity-95 transition-opacity flex items-center gap-1.5"
+                  >
+                    <Plus className="size-3.5" />
+                    <span>Guardar versión actual</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowManageVersionsModal(false)}
+                    className="px-3.5 py-1.5 rounded-lg border border-line hover:bg-background text-muted hover:text-ink"
+                  >
+                    Cerrar
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1184,6 +1825,8 @@ interface ReportDetailSectionProps {
   dateLabel: string;
   result: MatchAnalysisResult;
   savedNotice?: string;
+  cvVersionUsed?: string;
+  onSwitchCvAndReanalyze?: () => void;
   copiedKey: string | null;
   copiedAll: boolean;
   onCopyKey: (kw: string) => void;
@@ -1199,6 +1842,8 @@ function ReportDetailSection({
   dateLabel,
   result,
   savedNotice,
+  cvVersionUsed,
+  onSwitchCvAndReanalyze,
   copiedKey,
   copiedAll,
   onCopyKey,
@@ -1255,6 +1900,29 @@ function ReportDetailSection({
             </button>
           </div>
         </div>
+
+        {/* CV Version evaluated indicator */}
+        {cvVersionUsed && (
+          <div className="mb-4 rounded-xl bg-surface border border-line px-4 py-2.5 text-xs text-muted flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-2">
+              <Layers className="size-4 text-accent" />
+              <span>
+                Versión de currículum analizada:{" "}
+                <strong className="text-ink">{cvVersionUsed}</strong>
+              </span>
+            </div>
+            {onSwitchCvAndReanalyze && (
+              <button
+                type="button"
+                onClick={onSwitchCvAndReanalyze}
+                className="text-accent hover:underline font-semibold flex items-center gap-1 text-xs ml-auto"
+              >
+                <span>Probar con otra versión de tu CV</span>
+                <ArrowRight className="size-3" />
+              </button>
+            )}
+          </div>
+        )}
 
         {savedNotice && (
           <div className="mb-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 px-4 py-2.5 text-xs text-emerald-800 dark:text-emerald-200 flex items-center gap-2">
